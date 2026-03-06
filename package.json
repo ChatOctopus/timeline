@@ -1,0 +1,57 @@
+{
+  "name": "@ChatOctopus/timeline",
+  "version": "0.1.0",
+  "description": "Import and export timelines for Final Cut Pro, Adobe Premiere, and DaVinci Resolve",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "prepack": "npm run build && npm test",
+    "test:coverage": "vitest run --coverage"
+  },
+  "keywords": [
+    "fcpxml",
+    "xmeml",
+    "final-cut-pro",
+    "premiere",
+    "davinci-resolve",
+    "timeline",
+    "nle",
+    "video-editing",
+    "opentimelineio"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ChatOctopus/timeline.git"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "@vitest/coverage-v8": "^3.2.4",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}
