@@ -108,11 +108,11 @@ describe("writeOTIO", () => {
     expect(mediaRef.target_url).toBe("file:///videos/clip1.mp4")
   })
 
-  it("preserves format metadata in @ChatOctopus/timeline namespace", () => {
+  it("preserves format metadata in @chatoctopus/timeline namespace", () => {
     const json = writeOTIO(makeTimeline())
     const parsed = JSON.parse(json)
 
-    const meta = parsed.metadata["@ChatOctopus/timeline"].format
+    const meta = parsed.metadata["@chatoctopus/timeline"].format
     expect(meta.width).toBe(1920)
     expect(meta.height).toBe(1080)
     expect(meta.audioRate).toBe(48000)

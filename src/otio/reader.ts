@@ -69,7 +69,7 @@ export function readOTIO(jsonString: string): ImportResult {
   const name = parsed.name ?? "Untitled"
   const globalRate = rateFromRationalTime(parsed.global_start_time)
 
-  const otioMeta = parsed.metadata?.["@ChatOctopus/timeline"]?.format
+  const otioMeta = parsed.metadata?.["@chatoctopus/timeline"]?.format
   const width = otioMeta?.width ?? 1920
   const height = otioMeta?.height ?? 1080
   const audioRate = otioMeta?.audioRate ?? 48000
