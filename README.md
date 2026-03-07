@@ -1,4 +1,4 @@
-# @ChatOctopus/timeline
+# @chatoctopus/timeline
 
 Import and export video editing timelines for Final Cut Pro, Adobe Premiere Pro, DaVinci Resolve, and OpenTimelineIO.
 
@@ -7,12 +7,58 @@ Generates well-formed FCPXML 1.8 (Final Cut Pro), FCP7 XML / xmeml v5 (Premiere,
 ## Installation
 
 ```bash
-npm install @ChatOctopus/timeline
+npm install @chatoctopus/timeline
 ```
 
-Requires Node.js >= 18. For `buildTimeline()` auto-probing, [FFmpeg/FFprobe](https://ffmpeg.org/) must be installed and on your PATH.
+Requires Node.js >= 18. For `buildTimeline()` auto-probing, [FFmpeg/FFprobe](https://ffmpeg.org/) must be installed and on your PATH. Converting between formats does not require FFmpeg/FFprobe.
 
 ## Quick Start
+
+### Import from an existing project file
+
+Auto-detects FCPXML, xmeml, or OTIO format.
+
+```ts
+import { importTimeline, exportTimeline } from "@chatoctopus/timeline"
+import { readFileSync, writeFileSync } from "fs"
+
+// Read a Final Cut Pro project
+const fcpxml = readFileSync("project.fcpxml", "utf-8")
+const { timeline, warnings } = importTimeline(fcpxml)
+
+console.log(`Imported "${timeline.name}" with ${timeline.tracks.length} tracks`)
+if (warnings.length > 0) console.warn("Warnings:", warnings)
+
+// Convert to Premiere Pro format
+writeFileSync("project.xml", exportTimeline(timeline, "premiere"))
+```
+
+### Convert between formats
+
+```ts
+import { importTimeline, exportTimeline } from "@chatoctopus/timeline"
+import { readFileSync, writeFileSync } from "fs"
+
+// Premiere XML -> Final Cut Pro
+const premiereXml = readFileSync("edit.xml", "utf-8")
+const { timeline } = importTimeline(premiereXml)
+writeFileSync("edit.fcpxml", exportTimeline(timeline, "fcpx"))
+
+// Final Cut Pro -> DaVinci Resolve
+const fcpxml = readFileSync("edit.fcpxml", "utf-8")
+const { timeline: tl } = importTimeline(fcpxml)
+writeFileSync("edit-resolve.xml", exportTimeline(tl, "resolve"))
+
+// OTIO -> Final Cut Pro
+const otio = readFileSync("project.otio", "utf-8")
+const { timeline: tl2 } = importTimeline(otio)
+writeFileSync("project.fcpxml", exportTimeline(tl2, "fcpx"))
+
+// Any format -> OTIO
+const anyFile = readFileSync("timeline.fcpxml", "utf-8")
+const { timeline: tl3 } = importTimeline(anyFile)
+writeFileSync("timeline.otio", exportTimeline(tl3, "otio"))
+```
 
 ### Build a timeline from video files
 
@@ -21,7 +67,7 @@ The simplest path: provide file paths and optional trim points. Metadata is extr
 `buildTimeline()` validates trim inputs strictly: `startAt` and `duration` must be finite, non-negative numbers, `0` is treated as an explicit value, and explicit durations may be rejected for mixed-frame-rate sources when they cannot be represented consistently.
 
 ```ts
-import { buildTimeline, exportTimeline } from "@ChatOctopus/timeline"
+import { buildTimeline, exportTimeline } from "@chatoctopus/timeline"
 import { writeFileSync } from "fs"
 
 const timeline = await buildTimeline("Wedding Highlights", [
@@ -53,8 +99,8 @@ import {
   rational,
   ZERO,
   FRAME_RATES,
-} from "@ChatOctopus/timeline"
-import type { NLETimeline } from "@ChatOctopus/timeline"
+} from "@chatoctopus/timeline"
+import type { NLETimeline } from "@chatoctopus/timeline"
 import { writeFileSync } from "fs"
 
 const timeline: NLETimeline = {
@@ -98,52 +144,6 @@ const timeline: NLETimeline = {
 }
 
 writeFileSync("output.fcpxml", exportTimeline(timeline, "fcpx"))
-```
-
-### Import from an existing project file
-
-Auto-detects FCPXML, xmeml, or OTIO format.
-
-```ts
-import { importTimeline, exportTimeline } from "@ChatOctopus/timeline"
-import { readFileSync, writeFileSync } from "fs"
-
-// Read a Final Cut Pro project
-const fcpxml = readFileSync("project.fcpxml", "utf-8")
-const { timeline, warnings } = importTimeline(fcpxml)
-
-console.log(`Imported "${timeline.name}" with ${timeline.tracks.length} tracks`)
-if (warnings.length > 0) console.warn("Warnings:", warnings)
-
-// Convert to Premiere Pro format
-writeFileSync("project.xml", exportTimeline(timeline, "premiere"))
-```
-
-### Convert between formats
-
-```ts
-import { importTimeline, exportTimeline } from "@ChatOctopus/timeline"
-import { readFileSync, writeFileSync } from "fs"
-
-// Premiere XML -> Final Cut Pro
-const premiereXml = readFileSync("edit.xml", "utf-8")
-const { timeline } = importTimeline(premiereXml)
-writeFileSync("edit.fcpxml", exportTimeline(timeline, "fcpx"))
-
-// Final Cut Pro -> DaVinci Resolve
-const fcpxml = readFileSync("edit.fcpxml", "utf-8")
-const { timeline: tl } = importTimeline(fcpxml)
-writeFileSync("edit-resolve.xml", exportTimeline(tl, "resolve"))
-
-// OTIO -> Final Cut Pro
-const otio = readFileSync("project.otio", "utf-8")
-const { timeline: tl2 } = importTimeline(otio)
-writeFileSync("project.fcpxml", exportTimeline(tl2, "fcpx"))
-
-// Any format -> OTIO
-const anyFile = readFileSync("timeline.fcpxml", "utf-8")
-const { timeline: tl3 } = importTimeline(anyFile)
-writeFileSync("timeline.otio", exportTimeline(tl3, "otio"))
 ```
 
 ## API Reference

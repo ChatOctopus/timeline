@@ -197,7 +197,7 @@ export function writeOTIO(timeline: NLETimeline): string {
       color: null,
     },
     metadata: {
-      "@ChatOctopus/timeline": {
+      "@chatoctopus/timeline": {
         format: {
           width: timeline.format.width,
           height: timeline.format.height,
