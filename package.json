@@ -1,6 +1,6 @@
 {
   "name": "@chatoctopus/timeline",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Import and export timelines for Final Cut Pro, Adobe Premiere, and DaVinci Resolve",
   "type": "module",
   "main": "dist/index.js",
@@ -10,6 +10,9 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     }
+  },
+  "bin": {
+    "timeline": "./dist/cli.js"
   },
   "files": [
     "dist"
