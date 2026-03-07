@@ -12,6 +12,23 @@ npm install @chatoctopus/timeline
 
 Requires Node.js >= 18. For `buildTimeline()` auto-probing, [FFmpeg/FFprobe](https://ffmpeg.org/) must be installed and on your PATH. Converting between formats does not require FFmpeg/FFprobe.
 
+## CLI
+
+The package ships with a `timeline` CLI focused on format conversion and validation:
+
+```bash
+npx @chatoctopus/timeline convert ./edit.fcpxml --to otio --out ./edit.otio
+npx @chatoctopus/timeline validate ./edit.xml
+npx @chatoctopus/timeline validate ./edit.otio --json
+```
+
+### Commands
+
+| Command | Description |
+| ------- | ----------- |
+| `convert <input> --to <fcpx\|premiere\|resolve\|otio> [--out <path>]` | Auto-detect input format, convert to target editor format, and write to file (`--out`) or stdout |
+| `validate <input> [--json]` | Validate timeline integrity and frame alignment; exits with non-zero on hard errors |
+
 ## Quick Start
 
 ### Import from an existing project file
