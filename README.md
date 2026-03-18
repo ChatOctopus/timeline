@@ -4,6 +4,8 @@ Import and export video editing timelines for Final Cut Pro, Adobe Premiere Pro,
 
 Generates well-formed FCPXML 1.8 (Final Cut Pro), FCP7 XML / xmeml v5 (Premiere, Resolve), and OTIO (OpenTimelineIO) with frame-accurate rational time math -- no floating-point drift.
 
+Phase 1 checkpoint: the package now exports a new OTIO-first core model (`Timeline`, `Track`, `TrackItem`, `MediaReference`, `Marker`, `TimeRange`) plus core validation/duration utilities that understand it. The format adapters and builder APIs are still on the legacy adapter-backed path and will be migrated in later phases.
+
 ## Installation
 
 ```bash
@@ -218,11 +220,13 @@ All timing uses `Rational` (`{ num: number, den: number }`) to avoid floating-po
 ## Types
 
 ```ts
-interface NLETimeline {
+interface Timeline {
   name: string
   format: NLEFormat
-  tracks: NLETrack[]
-  assets: NLEAsset[]
+  tracks: Track[]
+  metadata?: Record<string, unknown>
+  markers?: Marker[]
+  globalStartTime?: Rational
 }
 
 interface NLEFormat {
@@ -231,47 +235,69 @@ interface NLEFormat {
   frameRate: Rational // e.g. { num: 30000, den: 1001 } for 29.97fps
   audioRate: number // e.g. 48000
   colorSpace?: string
-}
+type TrackItem = Clip | Gap | Transition
 
-interface NLETrack {
-  type: "video" | "audio"
-  clips: NLEClip[]
-}
-
-interface NLEClip {
-  assetId: string // references NLEAsset.id
+interface Track {
+  kind: "video" | "audio"
   name: string
-  offset: Rational // position on timeline
-  duration: Rational // clip duration on timeline
-  sourceIn: Rational // in-point within source media
-  sourceDuration: Rational
-  lane?: number
-  audioRole?: string
-  volume?: number
+  items: TrackItem[]
+  metadata?: Record<string, unknown>
+  markers?: Marker[]
   enabled?: boolean
 }
 
-interface NLEAsset {
-  id: string
+interface Clip {
+  kind: "clip"
   name: string
-  path: string // absolute file path
-  duration: Rational
-  hasVideo: boolean
-  hasAudio: boolean
-  videoFormat?: NLEFormat
-  audioChannels?: number
-  audioRate?: number
-  timecodeStart?: Rational
+  mediaReference: MediaReference
+  sourceRange?: TimeRange
+  metadata?: Record<string, unknown>
+  markers?: Marker[]
+  enabled?: boolean
 }
 
-interface ClipInput {
-  path: string // absolute file path
-  startAt?: number // trim start in seconds
-  duration?: number // clip length in seconds
+interface Gap {
+  kind: "gap"
+  sourceRange: TimeRange
+  metadata?: Record<string, unknown>
+  enabled?: boolean
+}
+
+interface Transition {
+  kind: "transition"
+  name?: string
+  transitionType?: string
+  inOffset: Rational
+  outOffset: Rational
+  metadata?: Record<string, unknown>
+}
+
+interface TimeRange {
+  startTime: Rational
+  duration: Rational
+}
+
+type MediaReference = ExternalReference | MissingReference
+
+interface ExternalReference {
+  type: "external"
+  targetUrl: string
+  name?: string
+  mediaKind?: "video" | "audio" | "image" | "unknown"
+  availableRange?: TimeRange
+  metadata?: Record<string, unknown>
+}
+
+interface MissingReference {
+  type: "missing"
+  name?: string
+  metadata?: Record<string, unknown>
 }
 
 type NLEEditor = "fcpx" | "premiere" | "resolve" | "otio"
 ```
+
+Legacy note: `NLETimeline`, `NLETrack`, `NLEClip`, and `NLEAsset` still exist temporarily while the FCPXML/xmeml/OTIO adapters are migrated to the new core model. Treat them as transitional, not the long-term API.
 
 ## Supported Formats
 

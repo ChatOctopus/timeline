@@ -20,6 +20,101 @@ export interface NLEFormat {
   colorSpace?: string
 }
 
+export type Metadata = Record<string, unknown>
+
+export interface TimeRange {
+  startTime: Rational
+  duration: Rational
+}
+
+export type MediaKind = "video" | "audio" | "image" | "unknown"
+
+export interface StreamInfo {
+  hasVideo?: boolean
+  hasAudio?: boolean
+  width?: number
+  height?: number
+  frameRate?: Rational
+  audioRate?: number
+  audioChannels?: number
+  colorSpace?: string
+}
+
+export interface ExternalReference {
+  type: "external"
+  targetUrl: string
+  name?: string
+  mediaKind?: MediaKind
+  availableRange?: TimeRange
+  metadata?: Metadata
+  streamInfo?: StreamInfo
+}
+
+export interface MissingReference {
+  type: "missing"
+  name?: string
+  metadata?: Metadata
+}
+
+export type MediaReference = ExternalReference | MissingReference
+
+export interface Marker {
+  name?: string
+  color?: string | null
+  metadata?: Metadata
+  markedRange?: TimeRange
+}
+
+export interface Clip {
+  kind: "clip"
+  name: string
+  mediaReference: MediaReference
+  sourceRange?: TimeRange
+  metadata?: Metadata
+  markers?: Marker[]
+  enabled?: boolean
+}
+
+export interface Gap {
+  kind: "gap"
+  sourceRange: TimeRange
+  metadata?: Metadata
+  enabled?: boolean
+}
+
+export interface Transition {
+  kind: "transition"
+  name?: string
+  transitionType?: string
+  inOffset: Rational
+  outOffset: Rational
+  metadata?: Metadata
+}
+
+export type TrackItem = Clip | Gap | Transition
+
+export interface Track {
+  kind: "video" | "audio"
+  name?: string
+  items: TrackItem[]
+  metadata?: Metadata
+  markers?: Marker[]
+  enabled?: boolean
+}
+
+export interface Timeline {
+  name: string
+  format: NLEFormat
+  tracks: Track[]
+  metadata?: Metadata
+  markers?: Marker[]
+  globalStartTime?: Rational
+}
+
+/**
+ * Legacy adapter-facing types. These remain in place temporarily while the
+ * format adapters are migrated to the OTIO-first core model.
+ */
 export interface NLEAsset {
   id: string
   name: string
