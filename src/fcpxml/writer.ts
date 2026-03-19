@@ -16,16 +16,17 @@ import {
 } from "../time.js"
 import {
   validateTimeline,
-  computeTimelineDuration,
 } from "../validate.js"
 import {
   clipDuration,
   collectAdapterResources,
   makeWarningEmitter,
+  mediaCapabilities,
   normalizeTargetUrl,
-  trackClipPlacements,
+  sequenceAudioLayout,
   warnOnUnsupportedExportFeatures,
 } from "../adapter-core.js"
+import { timelineDuration, trackClipPlacements } from "../timeline-logic.js"
 
 interface XMLNode {
   tag: string
@@ -76,24 +77,6 @@ function renderNode(node: XMLNode, indent: number): string {
     .join("\n")
 
   return `${pad}<${node.tag}${attrStr}>\n${childrenStr}\n${pad}</${node.tag}>`
-}
-
-function mediaCapabilities(reference: ExternalReference) {
-  const streamInfo = reference.streamInfo
-  const mediaKind = reference.mediaKind ?? "unknown"
-  const hasVideo = streamInfo?.hasVideo ?? (mediaKind === "video" || mediaKind === "image")
-  const hasAudio = streamInfo?.hasAudio ?? mediaKind === "audio"
-
-  return {
-    hasVideo,
-    hasAudio,
-    width: streamInfo?.width,
-    height: streamInfo?.height,
-    frameRate: streamInfo?.frameRate,
-    audioRate: streamInfo?.audioRate,
-    audioChannels: streamInfo?.audioChannels,
-    colorSpace: streamInfo?.colorSpace,
-  }
 }
 
 function buildFormatNode(timeline: Timeline, formatId: string): XMLNode {
@@ -229,7 +212,12 @@ export function writeFCPXML(
   const volumeDb = options?.volumeDb
   const resources = collectAdapterResources(timeline)
   const resourceMap = new Map(resources.map((resource) => [resource.reference.targetUrl, resource.id]))
-  const sequenceDuration = computeTimelineDuration(timeline)
+  const sequenceDuration = timelineDuration(timeline, {
+    transitionPolicy: "drop",
+    onUnsupportedTransition() {
+      emitWarning("Transitions are not supported in this export format and were dropped")
+    },
+  })
 
   const primaryTrackIndex = timeline.tracks.findIndex((track) => track.kind === "video")
   const fallbackPrimaryIndex = primaryTrackIndex >= 0 ? primaryTrackIndex : (timeline.tracks[0] ? 0 : -1)
@@ -243,7 +231,12 @@ export function writeFCPXML(
         ? index + 1
         : index
 
-      return trackClipPlacements(track, emitWarning)
+      return trackClipPlacements(track, {
+        transitionPolicy: "drop",
+        onUnsupportedTransition() {
+          emitWarning("Transitions are not supported in this export format and were dropped")
+        },
+      })
         .filter((placement) => placement.clip.mediaReference.type === "external")
         .map((placement) => ({
           clip: placement.clip,
@@ -377,7 +370,7 @@ export function writeFCPXML(
                       format: formatId,
                       tcStart: toFCPString(timeline.globalStartTime ?? ZERO),
                       tcFormat: isDropFrame(timeline.format.frameRate) ? "DF" : "NDF",
-                      audioLayout: "stereo",
+                      audioLayout: sequenceAudioLayout(timeline.format),
                       audioRate: audioRateStr,
                     },
                     children: [

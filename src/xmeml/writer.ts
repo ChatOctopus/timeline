@@ -13,15 +13,17 @@ import {
   ZERO,
   add,
 } from "../time.js"
-import { validateTimeline, computeTimelineDuration } from "../validate.js"
+import { validateTimeline } from "../validate.js"
 import {
   clipDuration,
   collectAdapterResources,
   makeWarningEmitter,
+  mediaCapabilities,
   normalizeTargetUrl,
-  trackClipPlacements,
+  sequenceAudioChannels,
   warnOnUnsupportedExportFeatures,
 } from "../adapter-core.js"
+import { timelineDuration, trackClipPlacements } from "../timeline-logic.js"
 
 function escapeXml(value: string): string {
   return value
@@ -108,21 +110,6 @@ function writeSampleCharacteristics(
   xml.close("samplecharacteristics")
 }
 
-function mediaCapabilities(reference: ExternalReference) {
-  const streamInfo = reference.streamInfo
-  const mediaKind = reference.mediaKind ?? "unknown"
-
-  return {
-    hasVideo: streamInfo?.hasVideo ?? (mediaKind === "video" || mediaKind === "image"),
-    hasAudio: streamInfo?.hasAudio ?? mediaKind === "audio",
-    width: streamInfo?.width ?? 1920,
-    height: streamInfo?.height ?? 1080,
-    frameRate: streamInfo?.frameRate,
-    audioRate: streamInfo?.audioRate ?? 48000,
-    audioChannels: streamInfo?.audioChannels ?? 2,
-  }
-}
-
 function writeFileElement(
   xml: XMLBuilder,
   fileId: string,
@@ -152,13 +139,13 @@ function writeFileElement(
   xml.open("media")
   if (caps.hasVideo) {
     xml.open("video")
-    writeSampleCharacteristics(xml, frameRate, caps.width, caps.height)
+    writeSampleCharacteristics(xml, frameRate, caps.width ?? 1920, caps.height ?? 1080)
     xml.close("video")
   }
   if (caps.hasAudio) {
     xml.open("audio")
     xml.open("samplecharacteristics")
-    xml.leaf("samplerate", String(caps.audioRate))
+    xml.leaf("samplerate", String(caps.audioRate ?? 48000))
     xml.leaf("sampledepth", "16")
     xml.close("samplecharacteristics")
     xml.close("audio")
@@ -203,7 +190,12 @@ function buildPayloads(
   const resourceMap = new Map(resources.map((resource) => [resource.reference.targetUrl, resource]))
   const tlFd = frameDuration(timeline.format.frameRate)
 
-  return trackClipPlacements(track, emitWarning).flatMap((placement, index) => {
+  return trackClipPlacements(track, {
+    transitionPolicy: "drop",
+    onUnsupportedTransition() {
+      emitWarning("Transitions are not supported in this export format and were dropped")
+    },
+  }).flatMap((placement, index) => {
     if (placement.clip.mediaReference.type !== "external") {
       emitWarning("Missing media references are not supported in this export format and were dropped")
       return []
@@ -258,7 +250,15 @@ export function writeXMEML(
 
   const tlFrameRate = timeline.format.frameRate
   const tlFd = frameDuration(tlFrameRate)
-  const sequenceDurationFrames = toFrames(computeTimelineDuration(timeline), tlFd)
+  const sequenceDurationFrames = toFrames(
+    timelineDuration(timeline, {
+      transitionPolicy: "drop",
+      onUnsupportedTransition() {
+        emitWarning("Transitions are not supported in this export format and were dropped")
+      },
+    }),
+    tlFd,
+  )
   const sequenceTimecodeFrames = toFrames(timeline.globalStartTime ?? ZERO, tlFd)
   const resources = collectAdapterResources(timeline)
 
@@ -328,7 +328,7 @@ export function writeXMEML(
   xml.close("video")
 
   xml.open("audio")
-  xml.leaf("numOutputChannels", "2")
+  xml.leaf("numOutputChannels", String(sequenceAudioChannels(timeline.format)))
   xml.open("format")
   xml.open("samplecharacteristics")
   xml.leaf("samplerate", String(timeline.format.audioRate))

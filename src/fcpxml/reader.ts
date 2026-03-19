@@ -16,7 +16,11 @@ import {
   subtractUnclamped,
   add,
 } from "../time.js"
-import { clipDuration, trackFromPlacements } from "../adapter-core.js"
+import {
+  audioChannelsFromLayout,
+  clipDuration,
+  trackFromPlacements,
+} from "../adapter-core.js"
 import { inferMediaKindFromTarget } from "../media-kind.js"
 
 const parser = new XMLParser({
@@ -215,11 +219,16 @@ export function readFCPXML(xmlString: string): ImportResult {
     colorSpace = primaryFormat["@_colorSpace"]
   }
 
+  const sequence = findSequence(fcpxml)
+  const spine = sequence?.spine
+
   const format: NLEFormat = {
     width,
     height,
     frameRate,
     audioRate: parseAudioRate(findAudioRate(fcpxml)),
+    audioLayout: sequence?.["@_audioLayout"] ?? undefined,
+    audioChannels: audioChannelsFromLayout(sequence?.["@_audioLayout"]),
     colorSpace,
   }
 
@@ -229,9 +238,6 @@ export function readFCPXML(xmlString: string): ImportResult {
     const formatNode = asset["@_format"] ? formatMap.get(asset["@_format"]) : primaryFormat
     resourceMap.set(asset["@_id"] ?? "", externalReferenceFromAsset(asset, formatNode, format))
   }
-
-  const sequence = findSequence(fcpxml)
-  const spine = sequence?.spine
 
   const primaryEntries: { offset: Rational; type: "gap" | "clip"; duration?: Rational; clip?: Clip }[] = []
   const placementsByKey = new Map<string, { kind: "video" | "audio"; lane: number; placements: { clip: Clip; offset: Rational }[] }>()
@@ -251,14 +257,18 @@ export function readFCPXML(xmlString: string): ImportResult {
   }
 
   if (spine) {
-    const directAssetClips = ensureArray(spine["asset-clip"]).map((node) => ({ node, offset: node["@_offset"] ? parseFCPString(node["@_offset"]) : ZERO }))
+    const directAssetClips = ensureArray(spine["asset-clip"]).map((node) => ({
+      node,
+      parsed: parseAssetClip(node, resourceMap),
+    }))
     const directGaps = ensureArray(spine.gap).map((node) => ({ node, offset: node["@_offset"] ? parseFCPString(node["@_offset"]) : ZERO }))
-    const primaryKind = directAssetClips
-      .map(({ node }) => parseAssetClip(node, resourceMap).kind)
-      .find((kind) => kind === "video") ?? directAssetClips[0] ? parseAssetClip(directAssetClips[0].node, resourceMap).kind : undefined
+    const primaryKind =
+      directAssetClips
+        .map(({ parsed }) => parsed.kind)
+        .find((kind) => kind === "video") ??
+      (directAssetClips[0] ? directAssetClips[0].parsed.kind : undefined)
 
-    for (const { node } of directAssetClips) {
-      const parsedClip = parseAssetClip(node, resourceMap)
+    for (const { node, parsed: parsedClip } of directAssetClips) {
       if (parsedClip.lane !== 0) {
         pushPlacement(parsedClip.kind, parsedClip.lane, parsedClip.clip, parsedClip.offset)
       } else if (primaryKind && parsedClip.kind === primaryKind) {

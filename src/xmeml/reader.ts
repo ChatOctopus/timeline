@@ -220,6 +220,9 @@ export function readXMEML(xmlString: string): ImportResult {
     height,
     frameRate: timelineFrameRate,
     audioRate,
+    audioChannels: audioSection?.numOutputChannels
+      ? parseInt(audioSection.numOutputChannels, 10)
+      : undefined,
   }
 
   const videoFiles = collectMergedFiles(videoSection)

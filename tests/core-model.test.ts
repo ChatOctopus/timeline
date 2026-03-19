@@ -116,7 +116,47 @@ describe("OTIO-first core model", () => {
       ],
     })
 
-    expect(toSeconds(computeTimelineDuration(timeline))).toBe(4)
+    expect(toSeconds(computeTimelineDuration(timeline))).toBe(3)
+  })
+
+  it("rejects transitions at track edges", () => {
+    const timeline = makeTimeline({
+      tracks: [
+        {
+          kind: "video",
+          items: [
+            {
+              kind: "transition",
+              name: "dangling",
+              inOffset: rational(12, 24),
+              outOffset: rational(12, 24),
+            },
+            {
+              kind: "clip",
+              name: "clip-1",
+              mediaReference: {
+                type: "external",
+                targetUrl: "file:///media/clip-1.mov",
+                mediaKind: "video",
+              },
+              sourceRange: {
+                startTime: ZERO,
+                duration: rational(2, 1),
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(validateTimeline(timeline)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "error",
+          message: 'Transition "dangling" must sit between two composable items',
+        }),
+      ]),
+    )
   })
 
   it("validates that external references require a target URL", () => {

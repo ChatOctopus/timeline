@@ -12,6 +12,8 @@ function makeTimeline(overrides?: Partial<Timeline>): Timeline {
       height: 1080,
       frameRate: rational(30000, 1001),
       audioRate: 48000,
+      audioChannels: 2,
+      audioLayout: "stereo",
       colorSpace: "1-1-1 (Rec. 709)",
     },
     tracks: [
@@ -118,6 +120,22 @@ describe("writeFCPXML", () => {
     expect(xml).toContain('height="1080"')
   })
 
+  it("uses the sequence audio layout from the format", () => {
+    const xml = writeFCPXML(
+      makeTimeline({
+        format: {
+          width: 1920,
+          height: 1080,
+          frameRate: rational(30000, 1001),
+          audioRate: 48000,
+          audioChannels: 1,
+        },
+      }),
+    )
+
+    expect(xml).toContain('audioLayout="mono"')
+  })
+
   it("includes assets deduped from media references", () => {
     const xml = writeFCPXML(makeTimeline())
     expect(xml).toContain('src="file:///videos/clip1.mp4"')
@@ -141,13 +159,14 @@ describe("writeFCPXML", () => {
           {
             kind: "video",
             items: [
+              makeTimeline().tracks[0].items[0],
               {
                 kind: "transition",
                 name: "cross-dissolve",
                 inOffset: rational(10, 30),
                 outOffset: rational(10, 30),
               },
-              ...makeTimeline().tracks[0].items,
+              ...makeTimeline().tracks[0].items.slice(1),
             ],
           },
         ],
@@ -162,6 +181,60 @@ describe("writeFCPXML", () => {
     expect(warnings.some((warning) => warning.toLowerCase().includes("transition"))).toBe(true)
     expect(warnings.some((warning) => warning.toLowerCase().includes("metadata"))).toBe(true)
     expect(warnings.some((warning) => warning.toLowerCase().includes("marker"))).toBe(true)
+  })
+
+  it("uses dropped-transition timing for exported sequence duration", () => {
+    const xml = writeFCPXML(
+      makeTimeline({
+        format: {
+          width: 1920,
+          height: 1080,
+          frameRate: rational(24, 1),
+          audioRate: 48000,
+        },
+        tracks: [
+          {
+            kind: "video",
+            items: [
+              {
+                kind: "clip",
+                name: "clip1",
+                mediaReference: {
+                  type: "external",
+                  targetUrl: "file:///videos/clip1.mp4",
+                  mediaKind: "video",
+                },
+                sourceRange: {
+                  startTime: ZERO,
+                  duration: rational(48, 24),
+                },
+              },
+              {
+                kind: "transition",
+                name: "cross-dissolve",
+                inOffset: rational(12, 24),
+                outOffset: rational(12, 24),
+              },
+              {
+                kind: "clip",
+                name: "clip2",
+                mediaReference: {
+                  type: "external",
+                  targetUrl: "file:///videos/clip2.mp4",
+                  mediaKind: "video",
+                },
+                sourceRange: {
+                  startTime: ZERO,
+                  duration: rational(48, 24),
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    )
+
+    expect(xml).toContain('<sequence duration="4/1s"')
   })
 
   it("throws on invalid timeline", () => {
@@ -185,6 +258,8 @@ describe("readFCPXML", () => {
       "gap",
       "clip",
     ])
+    expect(timeline.format.audioLayout).toBe("stereo")
+    expect(timeline.format.audioChannels).toBe(2)
   })
 
   it("preserves clip timing through roundtrip", () => {
@@ -278,6 +353,35 @@ describe("readFCPXML", () => {
       hasVideo: true,
       hasAudio: false,
     })
+  })
+
+  it("prefers video as the primary track when a direct spine audio clip appears first", () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+<fcpxml version="1.8">
+  <resources>
+    <format id="r1" width="1920" height="1080" frameDuration="1001/30000s"/>
+    <asset id="a1" name="narration.wav" src="file:///audio/narration.wav" start="0s" duration="300300/30000s" hasAudio="1" audioRate="48000"/>
+    <asset id="v1" name="video.mp4" src="file:///video/video.mp4" start="0s" duration="300300/30000s" hasVideo="1" hasAudio="1" format="r1"/>
+  </resources>
+  <library>
+    <event name="Test">
+      <project name="Primary Kind">
+        <sequence duration="300300/30000s" format="r1" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">
+          <spine>
+            <asset-clip name="narration" ref="a1" offset="0s" duration="300300/30000s" start="0s"/>
+            <asset-clip name="video" ref="v1" offset="0s" duration="300300/30000s" start="0s"/>
+          </spine>
+        </sequence>
+      </project>
+    </event>
+  </library>
+</fcpxml>`
+
+    const { timeline } = readFCPXML(xml)
+
+    expect(timeline.tracks[0]?.kind).toBe("video")
+    expect(timeline.tracks.some((track) => track.kind === "audio")).toBe(true)
   })
 
   it("throws on invalid XML", () => {

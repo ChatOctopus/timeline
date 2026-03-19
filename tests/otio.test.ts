@@ -13,6 +13,8 @@ function makeTimeline(overrides?: Partial<Timeline>): Timeline {
       height: 1080,
       frameRate: rational(24000, 1001),
       audioRate: 48000,
+      audioChannels: 2,
+      audioLayout: "stereo",
       colorSpace: "1-1-1 (Rec. 709)",
     },
     tracks: [
@@ -184,6 +186,8 @@ describe("readOTIO", () => {
     expect(timeline.format.width).toBe(1920)
     expect(timeline.format.height).toBe(1080)
     expect(timeline.format.audioRate).toBe(48000)
+    expect(timeline.format.audioChannels).toBe(2)
+    expect(timeline.format.audioLayout).toBe("stereo")
   })
 
   it("preserves external target URLs", () => {

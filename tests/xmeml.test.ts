@@ -12,6 +12,7 @@ function makeTimeline(overrides?: Partial<Timeline>): Timeline {
       height: 1080,
       frameRate: rational(30000, 1001),
       audioRate: 48000,
+      audioChannels: 2,
     },
     tracks: [
       {
@@ -114,6 +115,22 @@ describe("writeXMEML", () => {
     expect(xml).toContain("<ntsc>TRUE</ntsc>")
   })
 
+  it("uses the sequence audio channel count from the format", () => {
+    const xml = writeXMEML(
+      makeTimeline({
+        format: {
+          width: 1920,
+          height: 1080,
+          frameRate: rational(30000, 1001),
+          audioRate: 48000,
+          audioChannels: 1,
+        },
+      }),
+    )
+
+    expect(xml).toContain("<numOutputChannels>1</numOutputChannels>")
+  })
+
   it("generates PAL timebase for 25fps", () => {
     const xml = writeXMEML(
       makeTimeline({
@@ -153,13 +170,14 @@ describe("writeXMEML", () => {
           {
             kind: "video",
             items: [
+              makeTimeline().tracks[0].items[0],
               {
                 kind: "transition",
                 name: "cross-dissolve",
                 inOffset: rational(10, 30),
                 outOffset: rational(10, 30),
               },
-              ...makeTimeline().tracks[0].items,
+              ...makeTimeline().tracks[0].items.slice(1),
             ],
           },
         ],
@@ -174,6 +192,60 @@ describe("writeXMEML", () => {
     expect(warnings.some((warning) => warning.toLowerCase().includes("transition"))).toBe(true)
     expect(warnings.some((warning) => warning.toLowerCase().includes("metadata"))).toBe(true)
     expect(warnings.some((warning) => warning.toLowerCase().includes("marker"))).toBe(true)
+  })
+
+  it("uses dropped-transition timing for exported sequence duration", () => {
+    const xml = writeXMEML(
+      makeTimeline({
+        format: {
+          width: 1920,
+          height: 1080,
+          frameRate: rational(24, 1),
+          audioRate: 48000,
+        },
+        tracks: [
+          {
+            kind: "video",
+            items: [
+              {
+                kind: "clip",
+                name: "clip1",
+                mediaReference: {
+                  type: "external",
+                  targetUrl: "file:///footage/clip1.mp4",
+                  mediaKind: "video",
+                },
+                sourceRange: {
+                  startTime: ZERO,
+                  duration: rational(48, 24),
+                },
+              },
+              {
+                kind: "transition",
+                name: "cross-dissolve",
+                inOffset: rational(12, 24),
+                outOffset: rational(12, 24),
+              },
+              {
+                kind: "clip",
+                name: "clip2",
+                mediaReference: {
+                  type: "external",
+                  targetUrl: "file:///footage/clip2.mp4",
+                  mediaKind: "video",
+                },
+                sourceRange: {
+                  startTime: ZERO,
+                  duration: rational(48, 24),
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    )
+
+    expect(xml).toContain("<duration>96</duration>")
   })
 
   it("throws on invalid timeline", () => {
@@ -199,6 +271,7 @@ describe("readXMEML", () => {
       "gap",
       "clip",
     ])
+    expect(timeline.format.audioChannels).toBe(2)
   })
 
   it("preserves clip timing through roundtrip", () => {

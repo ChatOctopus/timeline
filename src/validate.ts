@@ -1,13 +1,12 @@
 import type {
   Timeline,
-  TrackItem,
   Clip,
   Gap,
   Transition,
-  MediaReference,
   Rational,
 } from "./types.js"
 import { ZERO, toSeconds, toFrames, frameDuration, isZero, add } from "./time.js"
+import { itemDuration, timelineDuration, transitionDuration } from "./timeline-logic.js"
 
 export interface ValidationError {
   type: "error" | "warning"
@@ -36,24 +35,6 @@ function warnIfNotFrameAligned(
 
   if (Math.abs(reconstructed - original) > 0.001) {
     errors.push({ type: "warning", message, clip })
-  }
-}
-
-function durationFromMediaReference(mediaReference: MediaReference): Rational {
-  if (mediaReference.type === "external" && mediaReference.availableRange) {
-    return mediaReference.availableRange.duration
-  }
-  return ZERO
-}
-
-function durationFromItem(item: TrackItem): Rational {
-  switch (item.kind) {
-    case "clip":
-      return item.sourceRange?.duration ?? durationFromMediaReference(item.mediaReference)
-    case "gap":
-      return item.sourceRange.duration
-    case "transition":
-      return ZERO
   }
 }
 
@@ -152,6 +133,8 @@ function validateCoreGap(gap: Gap, frameRate: Rational, errors: ValidationError[
 
 function validateCoreTransition(
   transition: Transition,
+  previousItem: Clip | Gap | Transition | undefined,
+  nextItem: Clip | Gap | Transition | undefined,
   errors: ValidationError[],
 ): void {
   if (compareRationals(transition.inOffset, ZERO) < 0) {
@@ -174,11 +157,49 @@ function validateCoreTransition(
       message: `Transition "${transition.name ?? "unnamed"}" has no overlap`,
     })
   }
+
+  if (!previousItem || !nextItem) {
+    errors.push({
+      type: "error",
+      message: `Transition "${transition.name ?? "unnamed"}" must sit between two composable items`,
+    })
+    return
+  }
+
+  if (previousItem.kind === "transition" || nextItem.kind === "transition") {
+    errors.push({
+      type: "error",
+      message: `Transition "${transition.name ?? "unnamed"}" cannot be adjacent to another transition`,
+    })
+    return
+  }
+
+  if (compareRationals(transition.inOffset, itemDuration(previousItem)) > 0) {
+    errors.push({
+      type: "error",
+      message: `Transition "${transition.name ?? "unnamed"}" inOffset exceeds the previous item duration`,
+    })
+  }
+
+  if (compareRationals(transition.outOffset, itemDuration(nextItem)) > 0) {
+    errors.push({
+      type: "error",
+      message: `Transition "${transition.name ?? "unnamed"}" outOffset exceeds the next item duration`,
+    })
+  }
+
+  if (compareRationals(transitionDuration(transition), add(itemDuration(previousItem), itemDuration(nextItem))) > 0) {
+    errors.push({
+      type: "error",
+      message: `Transition "${transition.name ?? "unnamed"}" overlap exceeds adjacent item durations`,
+    })
+  }
 }
 
 function validateCoreTimeline(timeline: Timeline, errors: ValidationError[]): void {
   for (const track of timeline.tracks) {
-    for (const item of track.items) {
+    for (let index = 0; index < track.items.length; index += 1) {
+      const item = track.items[index]
       switch (item.kind) {
         case "clip":
           validateCoreClip(item, timeline.format.frameRate, errors)
@@ -187,7 +208,12 @@ function validateCoreTimeline(timeline: Timeline, errors: ValidationError[]): vo
           validateCoreGap(item, timeline.format.frameRate, errors)
           break
         case "transition":
-          validateCoreTransition(item, errors)
+          validateCoreTransition(
+            item,
+            track.items[index - 1],
+            track.items[index + 1],
+            errors,
+          )
           break
       }
     }
@@ -238,19 +264,5 @@ export function hasErrors(results: ValidationError[]): boolean {
  * Compute total timeline duration from all tracks.
  */
 export function computeTimelineDuration(timeline: Timeline): Rational {
-  let maxEnd: Rational = ZERO
-
-  for (const track of timeline.tracks) {
-    let current = ZERO
-
-    for (const item of track.items) {
-      current = add(current, durationFromItem(item))
-    }
-
-    if (toSeconds(current) > toSeconds(maxEnd)) {
-      maxEnd = current
-    }
-  }
-
-  return maxEnd
+  return timelineDuration(timeline)
 }
