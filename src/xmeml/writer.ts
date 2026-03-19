@@ -2,6 +2,7 @@ import type {
   Timeline,
   ExportOptions,
   ExternalReference,
+  NLEFormat,
   Rational,
 } from "../types.js"
 import {
@@ -116,8 +117,9 @@ function writeFileElement(
   reference: ExternalReference,
   inferredDuration: { num: number; den: number },
   frameRate: Rational,
+  fallbackFormat: NLEFormat,
 ): void {
-  const caps = mediaCapabilities(reference)
+  const caps = mediaCapabilities(reference, fallbackFormat)
   const availableRange = reference.availableRange ?? {
     startTime: ZERO,
     duration: inferredDuration,
@@ -139,16 +141,16 @@ function writeFileElement(
   xml.open("media")
   if (caps.hasVideo) {
     xml.open("video")
-    writeSampleCharacteristics(xml, frameRate, caps.width ?? 1920, caps.height ?? 1080)
-    xml.close("video")
-  }
-  if (caps.hasAudio) {
-    xml.open("audio")
-    xml.open("samplecharacteristics")
-    xml.leaf("samplerate", String(caps.audioRate ?? 48000))
-    xml.leaf("sampledepth", "16")
-    xml.close("samplecharacteristics")
-    xml.close("audio")
+      writeSampleCharacteristics(xml, frameRate, caps.width!, caps.height!)
+      xml.close("video")
+    }
+    if (caps.hasAudio) {
+      xml.open("audio")
+      xml.open("samplecharacteristics")
+      xml.leaf("samplerate", String(caps.audioRate!))
+      xml.leaf("sampledepth", "16")
+      xml.close("samplecharacteristics")
+      xml.close("audio")
   }
   xml.close("media")
   xml.close("file")
@@ -315,7 +317,14 @@ export function writeXMEML(
       xml.leaf("in", String(payload.sourceIn))
       xml.leaf("out", String(payload.sourceOut))
       const resource = resources.find((entry) => entry.id === payload.resource.id)!
-      writeFileElement(xml, payload.fileId, payload.resource.reference, resource.inferredDuration, payload.resourceFrameRate)
+      writeFileElement(
+        xml,
+        payload.fileId,
+        payload.resource.reference,
+        resource.inferredDuration,
+        payload.resourceFrameRate,
+        timeline.format,
+      )
       xml.open("sourcetrack")
       xml.leaf("mediatype", "video")
       xml.leaf("trackindex", String(trackIndex + 1))
@@ -351,7 +360,14 @@ export function writeXMEML(
       xml.leaf("in", String(payload.sourceIn))
       xml.leaf("out", String(payload.sourceOut))
       const resource = resources.find((entry) => entry.id === payload.resource.id)!
-      writeFileElement(xml, payload.fileId, payload.resource.reference, resource.inferredDuration, payload.resourceFrameRate)
+      writeFileElement(
+        xml,
+        payload.fileId,
+        payload.resource.reference,
+        resource.inferredDuration,
+        payload.resourceFrameRate,
+        timeline.format,
+      )
       xml.open("sourcetrack")
       xml.leaf("mediatype", "audio")
       xml.leaf("trackindex", String(trackIndex + 1))

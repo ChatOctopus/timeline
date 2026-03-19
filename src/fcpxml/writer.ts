@@ -96,8 +96,9 @@ function buildFormatNode(timeline: Timeline, formatId: string): XMLNode {
 function buildAssetNode(
   resource: ReturnType<typeof collectAdapterResources>[number],
   formatId: string,
+  fallbackFormat: Timeline["format"],
 ): XMLNode {
-  const caps = mediaCapabilities(resource.reference)
+  const caps = mediaCapabilities(resource.reference, fallbackFormat)
   const availableRange = resource.reference.availableRange ?? {
     startTime: ZERO,
     duration: resource.inferredDuration,
@@ -349,7 +350,7 @@ export function writeFCPXML(
         tag: "resources",
         children: [
           buildFormatNode(timeline, formatId),
-          ...resources.map((resource) => buildAssetNode(resource, formatId)),
+          ...resources.map((resource) => buildAssetNode(resource, formatId, timeline.format)),
         ],
       },
       {

@@ -16,6 +16,7 @@ import type {
   MediaKind,
   StreamInfo,
 } from "../types.js"
+import { DEFAULT_FORMAT, resolveFormatDefaults } from "../defaults.js"
 import { rational, ZERO } from "../time.js"
 import { inferMediaKindFromTarget } from "../media-kind.js"
 
@@ -286,15 +287,15 @@ export function readOTIO(jsonString: string): ImportResult {
   const globalRate = rateFromRationalTime(parsed.global_start_time)
   const frameRate = rateToRational(globalRate)
 
-  const format: NLEFormat = {
-    width: typeof formatMeta.width === "number" ? formatMeta.width : 1920,
-    height: typeof formatMeta.height === "number" ? formatMeta.height : 1080,
+  const format: NLEFormat = resolveFormatDefaults({
+    width: typeof formatMeta.width === "number" ? formatMeta.width : DEFAULT_FORMAT.width,
+    height: typeof formatMeta.height === "number" ? formatMeta.height : DEFAULT_FORMAT.height,
     frameRate,
-    audioRate: typeof formatMeta.audioRate === "number" ? formatMeta.audioRate : 48000,
+    audioRate: typeof formatMeta.audioRate === "number" ? formatMeta.audioRate : DEFAULT_FORMAT.audioRate,
     audioChannels: typeof formatMeta.audioChannels === "number" ? formatMeta.audioChannels : undefined,
     audioLayout: typeof formatMeta.audioLayout === "string" ? formatMeta.audioLayout : undefined,
     colorSpace: typeof formatMeta.colorSpace === "string" ? formatMeta.colorSpace : undefined,
-  }
+  })
 
   const tracksStack = parsed.tracks
   const tracks = ensureArray(tracksStack?.children)
