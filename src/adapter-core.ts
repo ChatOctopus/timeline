@@ -4,17 +4,15 @@ import type {
   ExportOptions,
   ExternalReference,
   MediaReference,
+  NLEFormat,
   Rational,
-  Timeline,
   Track,
+  Timeline,
 } from "./types.js"
 import { ZERO, add, subtract, toSeconds } from "./time.js"
 import { toFileUrl } from "./file-url.js"
-
-export interface TrackClipPlacement {
-  clip: Clip
-  offset: Rational
-}
+import type { TrackClipPlacement } from "./timeline-logic.js"
+export type { TrackClipPlacement } from "./timeline-logic.js"
 
 export interface AdapterResource {
   id: string
@@ -51,6 +49,60 @@ function hasMarkers(value: { markers?: unknown[] } | undefined): boolean {
 
 function isMissingReference(reference: MediaReference): boolean {
   return reference.type === "missing"
+}
+
+export function mediaCapabilities(reference: ExternalReference) {
+  const streamInfo = reference.streamInfo
+  const mediaKind = reference.mediaKind ?? "unknown"
+
+  return {
+    hasVideo: streamInfo?.hasVideo ?? (mediaKind === "video" || mediaKind === "image"),
+    hasAudio: streamInfo?.hasAudio ?? mediaKind === "audio",
+    width: streamInfo?.width,
+    height: streamInfo?.height,
+    frameRate: streamInfo?.frameRate,
+    audioRate: streamInfo?.audioRate,
+    audioChannels: streamInfo?.audioChannels,
+    colorSpace: streamInfo?.colorSpace,
+  }
+}
+
+export function audioChannelsFromLayout(layout: string | undefined): number | undefined {
+  if (!layout) return undefined
+
+  switch (layout.toLowerCase()) {
+    case "mono":
+      return 1
+    case "stereo":
+      return 2
+    case "surround":
+      return 6
+    default: {
+      const match = layout.match(/(\d+)/)
+      return match ? parseInt(match[1], 10) : undefined
+    }
+  }
+}
+
+export function audioLayoutFromChannels(channels: number | undefined): string | undefined {
+  switch (channels) {
+    case 1:
+      return "mono"
+    case 2:
+      return "stereo"
+    case 6:
+      return "surround"
+    default:
+      return channels && channels > 0 ? `${channels}ch` : undefined
+  }
+}
+
+export function sequenceAudioChannels(format: NLEFormat): number {
+  return format.audioChannels ?? audioChannelsFromLayout(format.audioLayout) ?? 2
+}
+
+export function sequenceAudioLayout(format: NLEFormat): string {
+  return format.audioLayout ?? audioLayoutFromChannels(format.audioChannels) ?? "stereo"
 }
 
 export function warnOnUnsupportedExportFeatures(
@@ -103,34 +155,6 @@ export function warnOnUnsupportedExportFeatures(
       }
     }
   }
-}
-
-export function trackClipPlacements(
-  track: Track,
-  emitWarning?: (warning: string) => void,
-): TrackClipPlacement[] {
-  const placements: TrackClipPlacement[] = []
-  let currentOffset = ZERO
-
-  for (const item of track.items) {
-    if (item.kind === "gap") {
-      currentOffset = add(currentOffset, item.sourceRange.duration)
-      continue
-    }
-
-    if (item.kind === "transition") {
-      emitWarning?.("Transitions are not supported in this export format and were dropped")
-      continue
-    }
-
-    placements.push({
-      clip: item,
-      offset: currentOffset,
-    })
-    currentOffset = add(currentOffset, clipDuration(item))
-  }
-
-  return placements
 }
 
 function compareRationals(a: Rational, b: Rational): number {

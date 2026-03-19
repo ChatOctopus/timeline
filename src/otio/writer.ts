@@ -240,6 +240,8 @@ export function writeOTIO(timeline: Timeline): string {
         width: timeline.format.width,
         height: timeline.format.height,
         audioRate: timeline.format.audioRate,
+        audioChannels: timeline.format.audioChannels ?? null,
+        audioLayout: timeline.format.audioLayout ?? null,
         colorSpace: timeline.format.colorSpace ?? null,
       },
     }),

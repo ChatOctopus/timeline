@@ -291,6 +291,8 @@ export function readOTIO(jsonString: string): ImportResult {
     height: typeof formatMeta.height === "number" ? formatMeta.height : 1080,
     frameRate,
     audioRate: typeof formatMeta.audioRate === "number" ? formatMeta.audioRate : 48000,
+    audioChannels: typeof formatMeta.audioChannels === "number" ? formatMeta.audioChannels : undefined,
+    audioLayout: typeof formatMeta.audioLayout === "string" ? formatMeta.audioLayout : undefined,
     colorSpace: typeof formatMeta.colorSpace === "string" ? formatMeta.colorSpace : undefined,
   }
 

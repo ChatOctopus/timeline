@@ -17,6 +17,8 @@ export interface NLEFormat {
   height: number
   frameRate: Rational
   audioRate: number
+  audioChannels?: number
+  audioLayout?: string
   colorSpace?: string
 }
 

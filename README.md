@@ -203,6 +203,8 @@ exportTimeline(timeline, "fcpx", {
 
 Use `onWarning` when exporting to FCPXML or xmeml if you want to be notified when transitions, markers, metadata, missing references, or other core-only fields are dropped.
 
+Transitions are overlap items in the core model. `computeTimelineDuration()` accounts for that overlap, while current FCPXML and xmeml exports flatten transitions into butt cuts and warn because those adapters do not yet emit native transition elements.
+
 ### Time Utilities
 
 All timing uses `Rational` (`{ num: number, den: number }`) to avoid floating-point drift.
@@ -251,6 +253,8 @@ interface NLEFormat {
   height: number
   frameRate: Rational // e.g. { num: 30000, den: 1001 } for 29.97fps
   audioRate: number // e.g. 48000
+  audioChannels?: number
+  audioLayout?: string
   colorSpace?: string
 }
 
