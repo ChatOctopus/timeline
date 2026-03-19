@@ -8,12 +8,10 @@ import type {
   Marker,
   MediaReference,
   Metadata,
-  NLETimeline,
   Rational,
 } from "../types.js"
 import { ZERO } from "../time.js"
 import { validateTimeline } from "../validate.js"
-import { legacyToCoreTimeline, isLegacyTimeline } from "../core-legacy.js"
 import { toFileUrl } from "../file-url.js"
 
 interface OTIORationalTime {
@@ -209,23 +207,17 @@ function buildTrack(track: Track, frameRate: Rational) {
   }
 }
 
-function normalizeTimeline(timeline: Timeline | NLETimeline): Timeline {
-  return isLegacyTimeline(timeline) ? legacyToCoreTimeline(timeline) : timeline
-}
-
 /**
  * Generate an OpenTimelineIO (.otio) JSON string from a timeline.
  */
-export function writeOTIO(timelineInput: Timeline | NLETimeline): string {
-  const errors = validateTimeline(timelineInput)
+export function writeOTIO(timeline: Timeline): string {
+  const errors = validateTimeline(timeline)
   const hardErrors = errors.filter((e) => e.type === "error")
   if (hardErrors.length > 0) {
     throw new Error(
       `Timeline validation failed:\n${hardErrors.map((e) => `  - ${e.message}`).join("\n")}`,
     )
   }
-
-  const timeline = normalizeTimeline(timelineInput)
   const frameRate = timeline.format.frameRate
 
   const otioTimeline = {

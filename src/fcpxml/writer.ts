@@ -1,6 +1,5 @@
 import type {
   Timeline,
-  NLETimeline,
   ExportOptions,
   ExternalReference,
   Rational,
@@ -24,7 +23,6 @@ import {
   collectAdapterResources,
   makeWarningEmitter,
   normalizeTargetUrl,
-  normalizeTimeline,
   trackClipPlacements,
   warnOnUnsupportedExportFeatures,
 } from "../adapter-core.js"
@@ -214,18 +212,16 @@ function attachConnectedClips(
  * Generate FCPXML 1.8 from a Timeline.
  */
 export function writeFCPXML(
-  timelineInput: Timeline | NLETimeline,
+  timeline: Timeline,
   options?: ExportOptions,
 ): string {
-  const errors = validateTimeline(timelineInput)
+  const errors = validateTimeline(timeline)
   const hardErrors = errors.filter((error) => error.type === "error")
   if (hardErrors.length > 0) {
     throw new Error(
       `Timeline validation failed:\n${hardErrors.map((error) => `  - ${error.message}`).join("\n")}`,
     )
   }
-
-  const timeline = normalizeTimeline(timelineInput)
   const emitWarning = makeWarningEmitter(options)
   warnOnUnsupportedExportFeatures(timeline, emitWarning)
 

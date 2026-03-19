@@ -4,12 +4,10 @@ import type {
   ExportOptions,
   ExternalReference,
   MediaReference,
-  NLETimeline,
   Rational,
   Timeline,
   Track,
 } from "./types.js"
-import { legacyToCoreTimeline, isLegacyTimeline } from "./core-legacy.js"
 import { ZERO, add, subtract, toSeconds } from "./time.js"
 import { toFileUrl } from "./file-url.js"
 
@@ -22,10 +20,6 @@ export interface AdapterResource {
   id: string
   reference: ExternalReference
   inferredDuration: Rational
-}
-
-export function normalizeTimeline(timeline: Timeline | NLETimeline): Timeline {
-  return isLegacyTimeline(timeline) ? legacyToCoreTimeline(timeline) : timeline
 }
 
 export function makeWarningEmitter(options?: ExportOptions): (warning: string) => void {

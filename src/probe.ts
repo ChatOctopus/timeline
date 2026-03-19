@@ -4,6 +4,7 @@ import { promisify } from "node:util"
 import type { ExternalReference, MediaKind, Rational } from "./types.js"
 import { rational, ZERO, parseTimecode } from "./time.js"
 import { toFileUrl } from "./file-url.js"
+import { inferMediaKindFromTarget } from "./media-kind.js"
 
 const exec = promisify(execFile)
 
@@ -92,15 +93,13 @@ function inferMediaKind(
   videoStream?: FFProbeStream,
   audioStream?: FFProbeStream,
 ): MediaKind {
-  const lower = filePath.toLowerCase()
+  const inferredFromTarget = inferMediaKindFromTarget(filePath)
 
-  if (/\.(png|jpe?g|webp|gif|bmp|tiff?)$/.test(lower)) return "image"
+  if (inferredFromTarget === "image") return "image"
   if (videoStream) return "video"
   if (audioStream) return "audio"
-  if (/\.(wav|mp3|m4a|aac|flac|ogg)$/.test(lower)) return "audio"
-  if (/\.(mp4|mov|mkv|avi|webm|mxf)$/.test(lower)) return "video"
 
-  return "unknown"
+  return inferredFromTarget
 }
 
 function parseDuration(durationValue: string | undefined, frameRate?: Rational): Rational | undefined {

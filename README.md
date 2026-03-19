@@ -4,7 +4,7 @@ Import and export video editing timelines for Final Cut Pro, Adobe Premiere Pro,
 
 Generates well-formed FCPXML 1.8 (Final Cut Pro), FCP7 XML / xmeml v5 (Premiere, Resolve), and OTIO (OpenTimelineIO) with frame-accurate rational time math -- no floating-point drift.
 
-Phase 4 checkpoint: OTIO, FCPXML, and xmeml now all adapt directly to the OTIO-first core model. Imports return `Timeline`, writers accept `Timeline` or `NLETimeline`, and lossy FCPXML/xmeml exports can surface warnings through `ExportOptions.onWarning`.
+Phase 5 checkpoint: the package is now fully OTIO-first. OTIO, FCPXML, and xmeml all read and write the same `Timeline` model, legacy `NLE*` bridge types are gone, the CLI surfaces import/export warnings, and still-image clips round-trip as `mediaKind: "image"`.
 
 ## Installation
 
@@ -28,7 +28,7 @@ npx @chatoctopus/timeline validate ./edit.otio --json
 
 | Command | Description |
 | ------- | ----------- |
-| `convert <input> --to <fcpx\|premiere\|resolve\|otio> [--out <path>]` | Auto-detect input format, convert to target editor format, and write to file (`--out`) or stdout |
+| `convert <input> --to <fcpx\|premiere\|resolve\|otio> [--out <path>]` | Auto-detect input format, convert to target editor format, and write to file (`--out`) or stdout. Import and lossy-export warnings are written to stderr. |
 | `validate <input> [--json]` | Validate timeline integrity and frame alignment; exits with non-zero on hard errors |
 
 ## Quick Start
@@ -79,7 +79,7 @@ const { timeline: tl3 } = importTimeline(anyFile)
 writeFileSync("timeline.otio", exportTimeline(tl3, "otio"))
 ```
 
-### Build a timeline from video files
+### Build a timeline from media files
 
 The simplest path: provide file paths and optional trim points. Metadata is extracted automatically via FFprobe into inline `ExternalReference` objects.
 
@@ -167,7 +167,7 @@ writeFileSync("output.otio", exportTimeline(timeline, "otio"))
 writeFileSync("output.fcpxml", exportTimeline(timeline, "fcpx"))
 ```
 
-`Timeline` is now the primary API for OTIO, FCPXML, and xmeml workflows. `NLETimeline` still exists temporarily as a compatibility input shape while the last migration cleanup work continues.
+`Timeline` is the API for OTIO, FCPXML, and xmeml workflows.
 
 ## API Reference
 
@@ -175,7 +175,7 @@ writeFileSync("output.fcpxml", exportTimeline(timeline, "fcpx"))
 
 | Function                                     | Description                                                                            |
 | -------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `exportTimeline(timeline, editor, options?)` | Export a `Timeline` or `NLETimeline`. `editor` is `"fcpx"`, `"premiere"`, `"resolve"`, or `"otio"`. |
+| `exportTimeline(timeline, editor, options?)` | Export a `Timeline`. `editor` is `"fcpx"`, `"premiere"`, `"resolve"`, or `"otio"`. |
 | `importTimeline(content)`                    | Parse FCPXML, xmeml, or OTIO into `Timeline`. |
 | `buildTimelineFromFiles(name, files)`        | Probe files with FFprobe and build a linear `Timeline` with inline media references. |
 | `createTimeline(options)`                    | Create a `Timeline` with default format values for synthetic or programmatic edits. |
@@ -184,11 +184,11 @@ writeFileSync("output.fcpxml", exportTimeline(timeline, "fcpx"))
 
 | Function                          | Description                        |
 | --------------------------------- | ---------------------------------- |
-| `writeFCPXML(timeline, options?)` | Generate FCPXML 1.8 string from `Timeline` or `NLETimeline` |
+| `writeFCPXML(timeline, options?)` | Generate FCPXML 1.8 string from `Timeline` |
 | `readFCPXML(xmlString)`           | Parse FCPXML into `Timeline` |
-| `writeXMEML(timeline, options?)`  | Generate xmeml v5 string from `Timeline` or `NLETimeline` |
+| `writeXMEML(timeline, options?)`  | Generate xmeml v5 string from `Timeline` |
 | `readXMEML(xmlString)`            | Parse xmeml into `Timeline` |
-| `writeOTIO(timeline)`             | Generate OTIO JSON from `Timeline` or `NLETimeline` |
+| `writeOTIO(timeline)`             | Generate OTIO JSON from `Timeline` |
 | `readOTIO(jsonString)`            | Parse OTIO JSON into `Timeline` |
 
 Lossy export note:
@@ -224,15 +224,15 @@ All timing uses `Rational` (`{ num: number, den: number }`) to avoid floating-po
 
 | Function                            | Description                                                                         |
 | ----------------------------------- | ----------------------------------------------------------------------------------- |
-| `validateTimeline(timeline)`        | Returns array of `ValidationError` (checks asset refs, frame alignment, dimensions) |
+| `validateTimeline(timeline)`        | Returns array of `ValidationError` (checks media refs, source ranges, frame alignment, dimensions) |
 | `hasErrors(results)`                | `true` if any hard errors (not just warnings)                                       |
-| `computeTimelineDuration(timeline)` | Compute total duration from all track clips                                         |
+| `computeTimelineDuration(timeline)` | Compute total duration from all track items                                         |
 
 ### Probing
 
 | Function               | Description                                                   |
 | ---------------------- | ------------------------------------------------------------- |
-| `probeMediaReference(filePath)` | Run FFprobe on a file and return a populated `ExternalReference` |
+| `probeMediaReference(filePath)` | Run FFprobe on a file and return a populated `ExternalReference` for video, audio, or image media |
 
 ## Types
 
@@ -328,7 +328,7 @@ interface StreamInfo {
 type NLEEditor = "fcpx" | "premiere" | "resolve" | "otio"
 ```
 
-Legacy note: `NLETimeline`, `NLETrack`, `NLEClip`, and `NLEAsset` still exist temporarily as compatibility input types. Treat them as transitional, not the long-term API.
+Still images are modeled as `ExternalReference` objects with `mediaKind: "image"` on normal video tracks. The clip carries the display duration via `sourceRange`, and `buildTimelineFromFiles()` will populate an `availableRange` for stills when you provide an explicit duration.
 
 Builder inputs:
 
@@ -437,12 +437,12 @@ console.log('Done.');
 ```
 src/
 ├── index.ts           Public API: exportTimeline, importTimeline, createTimeline, buildTimelineFromFiles
-├── types.ts           OTIO-first core types plus temporary legacy bridge types
+├── types.ts           OTIO-first core types
 ├── time.ts            Rational arithmetic, frame alignment, SMPTE timecode parsing
 ├── probe.ts           FFprobe -> ExternalReference probing
+├── media-kind.ts      Shared file-extension media kind inference
 ├── builders.ts        Core-native timeline construction helpers
-├── validate.ts        Core + legacy validation and duration computation
-├── core-legacy.ts     Temporary bridge between the core model and legacy adapters
+├── validate.ts        Core validation and duration computation
 ├── fcpxml/
 │   ├── writer.ts      FCPXML 1.8 generation
 │   └── reader.ts      FCPXML parsing

@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest"
 import { exportTimeline, importTimeline } from "../src/index.js"
-import type { NLETimeline } from "../src/types.js"
+import type { Timeline } from "../src/types.js"
 import { rational, ZERO } from "../src/time.js"
 
-function makeTimeline(): NLETimeline {
+function makeTimeline(): Timeline {
   return {
     name: "API Test",
     format: {
@@ -13,30 +13,36 @@ function makeTimeline(): NLETimeline {
       audioRate: 48000,
       colorSpace: "1-1-1 (Rec. 709)",
     },
-    assets: [
-      {
-        id: "r2",
-        name: "scene1.mov",
-        path: "/media/scene1.mov",
-        duration: rational(240 * 1001, 24000),
-        hasVideo: true,
-        hasAudio: true,
-        audioChannels: 2,
-        audioRate: 48000,
-        timecodeStart: ZERO,
-      },
-    ],
     tracks: [
       {
-        type: "video",
-        clips: [
+        kind: "video",
+        items: [
           {
-            assetId: "r2",
+            kind: "clip",
             name: "scene1",
-            offset: ZERO,
-            duration: rational(120 * 1001, 24000),
-            sourceIn: ZERO,
-            sourceDuration: rational(120 * 1001, 24000),
+            mediaReference: {
+              type: "external",
+              name: "scene1.mov",
+              targetUrl: "file:///media/scene1.mov",
+              mediaKind: "video",
+              availableRange: {
+                startTime: ZERO,
+                duration: rational(240 * 1001, 24000),
+              },
+              streamInfo: {
+                hasVideo: true,
+                hasAudio: true,
+                width: 1920,
+                height: 1080,
+                frameRate: rational(24000, 1001),
+                audioRate: 48000,
+                audioChannels: 2,
+              },
+            },
+            sourceRange: {
+              startTime: ZERO,
+              duration: rational(120 * 1001, 24000),
+            },
           },
         ],
       },
