@@ -9,6 +9,11 @@ import type {
   Track,
   Timeline,
 } from "./types.js"
+import {
+  DEFAULT_AUDIO_CHANNELS,
+  DEFAULT_AUDIO_LAYOUT,
+  resolveFormatDefaults,
+} from "./defaults.js"
 import { ZERO, add, subtract, toSeconds } from "./time.js"
 import { toFileUrl } from "./file-url.js"
 import type { TrackClipPlacement } from "./timeline-logic.js"
@@ -51,19 +56,24 @@ function isMissingReference(reference: MediaReference): boolean {
   return reference.type === "missing"
 }
 
-export function mediaCapabilities(reference: ExternalReference) {
+export function mediaCapabilities(reference: ExternalReference, fallbackFormat?: Partial<NLEFormat>) {
   const streamInfo = reference.streamInfo
   const mediaKind = reference.mediaKind ?? "unknown"
+  const resolvedFormat = resolveFormatDefaults(fallbackFormat)
+  const hasVideo = streamInfo?.hasVideo ?? (mediaKind === "video" || mediaKind === "image")
+  const hasAudio = streamInfo?.hasAudio ?? mediaKind === "audio"
 
   return {
-    hasVideo: streamInfo?.hasVideo ?? (mediaKind === "video" || mediaKind === "image"),
-    hasAudio: streamInfo?.hasAudio ?? mediaKind === "audio",
-    width: streamInfo?.width,
-    height: streamInfo?.height,
-    frameRate: streamInfo?.frameRate,
-    audioRate: streamInfo?.audioRate,
-    audioChannels: streamInfo?.audioChannels,
-    colorSpace: streamInfo?.colorSpace,
+    hasVideo,
+    hasAudio,
+    width: hasVideo ? streamInfo?.width ?? resolvedFormat.width : undefined,
+    height: hasVideo ? streamInfo?.height ?? resolvedFormat.height : undefined,
+    frameRate: hasVideo ? streamInfo?.frameRate ?? resolvedFormat.frameRate : undefined,
+    audioRate: hasAudio ? streamInfo?.audioRate ?? resolvedFormat.audioRate : undefined,
+    audioChannels: hasAudio
+      ? streamInfo?.audioChannels ?? fallbackFormat?.audioChannels ?? DEFAULT_AUDIO_CHANNELS
+      : undefined,
+    colorSpace: hasVideo ? streamInfo?.colorSpace ?? resolvedFormat.colorSpace : undefined,
   }
 }
 
@@ -98,11 +108,11 @@ export function audioLayoutFromChannels(channels: number | undefined): string | 
 }
 
 export function sequenceAudioChannels(format: NLEFormat): number {
-  return format.audioChannels ?? audioChannelsFromLayout(format.audioLayout) ?? 2
+  return format.audioChannels ?? audioChannelsFromLayout(format.audioLayout) ?? DEFAULT_AUDIO_CHANNELS
 }
 
 export function sequenceAudioLayout(format: NLEFormat): string {
-  return format.audioLayout ?? audioLayoutFromChannels(format.audioChannels) ?? "stereo"
+  return format.audioLayout ?? audioLayoutFromChannels(format.audioChannels) ?? DEFAULT_AUDIO_LAYOUT
 }
 
 export function warnOnUnsupportedExportFeatures(

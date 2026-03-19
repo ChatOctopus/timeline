@@ -8,6 +8,7 @@ import type {
   NLEFormat,
   Rational,
 } from "../types.js"
+import { DEFAULT_FORMAT, resolveFormatDefaults } from "../defaults.js"
 import {
   parseFCPString,
   ZERO,
@@ -39,7 +40,7 @@ function parseAudioRate(rate: string): number {
     return parseInt(rate, 10) * 1000
   }
 
-  return parseInt(rate, 10) || 48000
+  return parseInt(rate, 10) || DEFAULT_FORMAT.audioRate
 }
 
 function findTimelineName(fcpxml: any): string | null {
@@ -64,11 +65,6 @@ function findSequence(fcpxml: any): any {
   }
 
   return null
-}
-
-function findAudioRate(fcpxml: any): string {
-  const sequence = findSequence(fcpxml)
-  return sequence?.["@_audioRate"] ?? "48000"
 }
 
 function externalReferenceFromAsset(
@@ -202,9 +198,9 @@ export function readFCPXML(xmlString: string): ImportResult {
   const assets = ensureArray(fcpxml.resources.asset)
   const primaryFormat = formats[0]
 
-  let frameRate = rational(24, 1)
-  let width = 1920
-  let height = 1080
+  let frameRate = DEFAULT_FORMAT.frameRate
+  let width = DEFAULT_FORMAT.width
+  let height = DEFAULT_FORMAT.height
   let colorSpace: string | undefined
 
   if (primaryFormat) {
@@ -214,23 +210,23 @@ export function readFCPXML(xmlString: string): ImportResult {
         frameRate = rational(frameDuration.den, frameDuration.num)
       }
     }
-    width = parseInt(primaryFormat["@_width"] ?? "1920", 10)
-    height = parseInt(primaryFormat["@_height"] ?? "1080", 10)
+    width = parseInt(primaryFormat["@_width"] ?? String(DEFAULT_FORMAT.width), 10)
+    height = parseInt(primaryFormat["@_height"] ?? String(DEFAULT_FORMAT.height), 10)
     colorSpace = primaryFormat["@_colorSpace"]
   }
 
   const sequence = findSequence(fcpxml)
   const spine = sequence?.spine
 
-  const format: NLEFormat = {
+  const format: NLEFormat = resolveFormatDefaults({
     width,
     height,
     frameRate,
-    audioRate: parseAudioRate(findAudioRate(fcpxml)),
+    audioRate: sequence?.["@_audioRate"] ? parseAudioRate(sequence["@_audioRate"]) : undefined,
     audioLayout: sequence?.["@_audioLayout"] ?? undefined,
     audioChannels: audioChannelsFromLayout(sequence?.["@_audioLayout"]),
     colorSpace,
-  }
+  })
 
   const formatMap = new Map(ensureArray(fcpxml.resources.format).map((node: any) => [node["@_id"], node]))
   const resourceMap = new Map<string, ExternalReference>()

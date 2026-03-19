@@ -160,6 +160,45 @@ describe("writeXMEML", () => {
     expect(xml).toContain("<pathurl>file:///footage/broll.mp4</pathurl>")
   })
 
+  it("uses shared timeline defaults when media stream info is incomplete", () => {
+    const xml = writeXMEML(
+      makeTimeline({
+        format: {
+          width: 1280,
+          height: 720,
+          frameRate: rational(25, 1),
+          audioRate: 44100,
+          audioChannels: 1,
+        },
+        tracks: [
+          {
+            kind: "video",
+            items: [
+              {
+                kind: "clip",
+                name: "fallback-media",
+                mediaReference: {
+                  type: "external",
+                  name: "fallback.mov",
+                  targetUrl: "file:///footage/fallback.mov",
+                  mediaKind: "video",
+                },
+                sourceRange: {
+                  startTime: ZERO,
+                  duration: rational(50, 25),
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    )
+
+    expect(xml).toContain("<width>1280</width>")
+    expect(xml).toContain("<height>720</height>")
+    expect(xml).toContain("<samplerate>44100</samplerate>")
+  })
+
   it("surfaces warnings when dropping unsupported core-only fields", () => {
     const warnings: string[] = []
     const xml = writeXMEML(

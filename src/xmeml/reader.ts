@@ -7,6 +7,7 @@ import type {
   NLEFormat,
   Track,
 } from "../types.js"
+import { DEFAULT_AUDIO_CHANNELS, DEFAULT_FORMAT, resolveFormatDefaults } from "../defaults.js"
 import { rational, ZERO } from "../time.js"
 import { trackFromPlacements } from "../adapter-core.js"
 import { inferMediaKindFromTarget } from "../media-kind.js"
@@ -112,7 +113,7 @@ function referenceFromFile(
       height,
       frameRate: assetFrameRate,
       audioRate,
-      audioChannels: hasAudio ? 2 : undefined,
+      audioChannels: hasAudio ? timelineFormat.audioChannels ?? DEFAULT_AUDIO_CHANNELS : undefined,
     },
   }
 }
@@ -203,19 +204,22 @@ export function readXMEML(xmlString: string): ImportResult {
   const videoSection = media.video
   const audioSection = media.audio
 
-  let width = 1920
-  let height = 1080
+  let width = DEFAULT_FORMAT.width
+  let height = DEFAULT_FORMAT.height
   if (videoSection?.format?.samplecharacteristics) {
-    width = parseInt(videoSection.format.samplecharacteristics.width ?? "1920", 10)
-    height = parseInt(videoSection.format.samplecharacteristics.height ?? "1080", 10)
+    width = parseInt(videoSection.format.samplecharacteristics.width ?? String(DEFAULT_FORMAT.width), 10)
+    height = parseInt(videoSection.format.samplecharacteristics.height ?? String(DEFAULT_FORMAT.height), 10)
   }
 
-  let audioRate = 48000
+  let audioRate = DEFAULT_FORMAT.audioRate
   if (audioSection?.format?.samplecharacteristics) {
-    audioRate = parseInt(audioSection.format.samplecharacteristics.samplerate ?? "48000", 10)
+    audioRate = parseInt(
+      audioSection.format.samplecharacteristics.samplerate ?? String(DEFAULT_FORMAT.audioRate),
+      10,
+    )
   }
 
-  const format: NLEFormat = {
+  const format: NLEFormat = resolveFormatDefaults({
     width,
     height,
     frameRate: timelineFrameRate,
@@ -223,7 +227,7 @@ export function readXMEML(xmlString: string): ImportResult {
     audioChannels: audioSection?.numOutputChannels
       ? parseInt(audioSection.numOutputChannels, 10)
       : undefined,
-  }
+  })
 
   const videoFiles = collectMergedFiles(videoSection)
   const audioFiles = collectMergedFiles(audioSection)

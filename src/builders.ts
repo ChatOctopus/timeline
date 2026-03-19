@@ -1,12 +1,12 @@
 import type {
   CreateTimelineOptions,
   ExternalReference,
-  NLEFormat,
   Rational,
   Timeline,
   TimelineFileInput,
   Track,
 } from "./types.js"
+import { DEFAULT_FORMAT, resolveFormatDefaults } from "./defaults.js"
 import { probeMediaReference } from "./probe.js"
 import {
   ZERO,
@@ -17,13 +17,6 @@ import {
   subtract,
   toSeconds,
 } from "./time.js"
-
-const DEFAULT_FORMAT: NLEFormat = {
-  width: 1920,
-  height: 1080,
-  frameRate: rational(24, 1),
-  audioRate: 48000,
-}
 
 function clone<T>(value: T): T {
   return structuredClone(value)
@@ -93,20 +86,20 @@ function chooseSharedDuration(
   return toSeconds(sharedDuration) <= toSeconds(remaining) + 1e-9 ? sharedDuration : null
 }
 
-function inferTimelineFormat(references: ExternalReference[]): NLEFormat {
+function inferTimelineFormat(references: ExternalReference[]): Timeline["format"] {
   const visualReference = references.find(
     (reference) => reference.mediaKind === "video" || reference.mediaKind === "image",
   )
   const firstFrameRate = references.find((reference) => reference.streamInfo?.frameRate)
   const firstAudioRate = references.find((reference) => reference.streamInfo?.audioRate)
 
-  return {
+  return resolveFormatDefaults({
     width: visualReference?.streamInfo?.width ?? DEFAULT_FORMAT.width,
     height: visualReference?.streamInfo?.height ?? DEFAULT_FORMAT.height,
     frameRate: firstFrameRate?.streamInfo?.frameRate ?? DEFAULT_FORMAT.frameRate,
     audioRate: firstAudioRate?.streamInfo?.audioRate ?? DEFAULT_FORMAT.audioRate,
     colorSpace: visualReference?.streamInfo?.colorSpace,
-  }
+  })
 }
 
 function inferTrackKind(reference: ExternalReference, input: TimelineFileInput): "video" | "audio" {
@@ -126,10 +119,7 @@ export function createTimeline(options: CreateTimelineOptions): Timeline {
 
   return {
     name: options.name,
-    format: {
-      ...DEFAULT_FORMAT,
-      ...(options.format ? clone(options.format) : {}),
-    },
+    format: resolveFormatDefaults(options.format ? clone(options.format) : undefined),
     tracks: clone(options.tracks ?? []),
     metadata: options.metadata ? clone(options.metadata) : undefined,
     markers: options.markers ? clone(options.markers) : undefined,
