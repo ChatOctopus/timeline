@@ -17,6 +17,7 @@ import type {
   StreamInfo,
 } from "../types.js"
 import { rational, ZERO } from "../time.js"
+import { inferMediaKindFromTarget } from "../media-kind.js"
 
 function ensureArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
@@ -42,14 +43,6 @@ function packageNamespace(metadata: Metadata | undefined): Record<string, unknow
   return isRecord(metadata["@chatoctopus/timeline"])
     ? (metadata["@chatoctopus/timeline"] as Record<string, unknown>)
     : {}
-}
-
-function inferMediaKind(targetUrl: string): MediaKind {
-  const lower = targetUrl.toLowerCase()
-  if (/\.(png|jpe?g|webp|gif|bmp|tiff?)$/.test(lower)) return "image"
-  if (/\.(wav|mp3|m4a|aac|flac|ogg)$/.test(lower)) return "audio"
-  if (/\.(mp4|mov|mkv|avi|webm|mxf)$/.test(lower)) return "video"
-  return "unknown"
 }
 
 function rateToRational(rate: number): Rational {
@@ -161,7 +154,7 @@ function parseMediaReference(value: any, warnings: string[]): MediaReference {
     const targetUrl = value.target_url ?? ""
     const mediaKind = typeof namespace.mediaKind === "string"
       ? (namespace.mediaKind as MediaKind)
-      : inferMediaKind(targetUrl)
+      : inferMediaKindFromTarget(targetUrl)
 
     const reference: ExternalReference = {
       type: "external",

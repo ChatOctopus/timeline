@@ -231,7 +231,11 @@ async function runConvert(argv: string[], io: CliIO): Promise<number> {
     io.stderr(`[warning] ${warning}\n`)
   }
 
-  const converted = exportTimeline(timeline, to)
+  const converted = exportTimeline(timeline, to, {
+    onWarning(warning) {
+      io.stderr(`[warning] ${warning}\n`)
+    },
+  })
 
   if (outPath) {
     await writeFile(outPath, converted, "utf-8")

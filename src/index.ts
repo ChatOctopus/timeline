@@ -14,10 +14,6 @@ export type {
   TrackItem,
   Track,
   Timeline,
-  NLETimeline,
-  NLETrack,
-  NLEClip,
-  NLEAsset,
   NLEFormat,
   NLEEditor,
   NLEExportFormat,
@@ -68,7 +64,6 @@ export { readOTIO } from "./otio/reader.js"
 
 import type {
   Timeline,
-  NLETimeline,
   NLEEditor,
   NLEExportFormat,
   ExportOptions,
@@ -97,7 +92,7 @@ const EDITOR_FORMAT_MAP: Record<NLEEditor, NLEExportFormat> = {
  * @returns XML or JSON string ready to be written to a file
  */
 export function exportTimeline(
-  timeline: Timeline | NLETimeline,
+  timeline: Timeline,
   editor: NLEEditor,
   options?: Omit<ExportOptions, "format">,
 ): string {

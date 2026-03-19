@@ -17,6 +17,7 @@ import {
   add,
 } from "../time.js"
 import { clipDuration, trackFromPlacements } from "../adapter-core.js"
+import { inferMediaKindFromTarget } from "../media-kind.js"
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -84,12 +85,21 @@ function externalReferenceFromAsset(
     : timelineFormat.audioRate
   const hasVideo = asset["@_hasVideo"] === "1"
   const hasAudio = asset["@_hasAudio"] === "1"
+  const targetUrl = asset["@_src"] ?? asset?.["media-rep"]?.["@_src"] ?? ""
+  const inferredMediaKind = inferMediaKindFromTarget(targetUrl)
 
   return {
     type: "external",
     name: asset["@_name"] ?? undefined,
-    targetUrl: asset["@_src"] ?? asset?.["media-rep"]?.["@_src"] ?? "",
-    mediaKind: hasVideo ? "video" : hasAudio ? "audio" : "unknown",
+    targetUrl,
+    mediaKind:
+      inferredMediaKind === "image"
+        ? "image"
+        : hasVideo
+          ? "video"
+          : hasAudio
+            ? "audio"
+            : inferredMediaKind,
     availableRange: asset["@_duration"]
       ? {
           startTime: asset["@_start"] ? parseFCPString(asset["@_start"]) : ZERO,

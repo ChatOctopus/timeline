@@ -9,6 +9,7 @@ import type {
 } from "../types.js"
 import { rational, ZERO } from "../time.js"
 import { trackFromPlacements } from "../adapter-core.js"
+import { inferMediaKindFromTarget } from "../media-kind.js"
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -83,12 +84,21 @@ function referenceFromFile(
   const audioRate = file.media?.audio?.samplecharacteristics
     ? parseInt(file.media.audio.samplecharacteristics.samplerate ?? String(timelineFormat.audioRate), 10)
     : timelineFormat.audioRate
+  const targetUrl = file.pathurl ?? ""
+  const inferredMediaKind = inferMediaKindFromTarget(targetUrl)
 
   return {
     type: "external",
     name: file.name ?? undefined,
-    targetUrl: file.pathurl ?? "",
-    mediaKind: hasVideo ? "video" : hasAudio ? "audio" : "unknown",
+    targetUrl,
+    mediaKind:
+      inferredMediaKind === "image"
+        ? "image"
+        : hasVideo
+          ? "video"
+          : hasAudio
+            ? "audio"
+            : inferredMediaKind,
     availableRange: file.duration
       ? {
           startTime: rational(timecodeFrames * assetFrameDuration.num, assetFrameDuration.den),

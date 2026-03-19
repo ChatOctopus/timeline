@@ -226,6 +226,60 @@ describe("readFCPXML", () => {
     })
   })
 
+  it("preserves still-image media references as image clips", () => {
+    const xml = writeFCPXML(
+      makeTimeline({
+        tracks: [
+          {
+            kind: "video",
+            items: [
+              {
+                kind: "clip",
+                name: "slide",
+                mediaReference: {
+                  type: "external",
+                  name: "slide.png",
+                  targetUrl: "file:///slides/slide.png",
+                  mediaKind: "image",
+                  availableRange: {
+                    startTime: ZERO,
+                    duration: rational(90 * 1001, 30000),
+                  },
+                  streamInfo: {
+                    hasVideo: true,
+                    hasAudio: false,
+                    width: 1920,
+                    height: 1080,
+                    frameRate: rational(30000, 1001),
+                  },
+                },
+                sourceRange: {
+                  startTime: ZERO,
+                  duration: rational(90 * 1001, 30000),
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    )
+
+    const { timeline } = readFCPXML(xml)
+    const clip = expectClip(timeline.tracks[0].items[0])
+
+    expect(clip.mediaReference.type).toBe("external")
+    if (clip.mediaReference.type !== "external") {
+      throw new Error("expected external reference")
+    }
+
+    expect(clip.mediaReference.mediaKind).toBe("image")
+    expect(clip.mediaReference.targetUrl).toBe("file:///slides/slide.png")
+    expect(clip.mediaReference.streamInfo).toMatchObject({
+      hasVideo: true,
+      hasAudio: false,
+    })
+  })
+
   it("throws on invalid XML", () => {
     expect(() => readFCPXML("<html><body>not xml</body></html>")).toThrow(
       "Invalid FCPXML",

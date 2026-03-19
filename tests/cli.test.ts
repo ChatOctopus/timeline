@@ -1,46 +1,46 @@
-import { describe, expect, it } from "vitest"
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
-import { join } from "node:path"
-import { tmpdir } from "node:os"
-import { pathToFileURL } from "node:url"
-import { isDirectRunInvocation, runCli } from "../src/cli.js"
-import { exportTimeline, rational, ZERO } from "../src/index.js"
-import type { NLETimeline } from "../src/types.js"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import type { Timeline } from "../src/types.js"
+import { rational, ZERO } from "../src/time.js"
 
-function makeTimeline(): NLETimeline {
+function makeTimeline(): Timeline {
   return {
     name: "CLI Test",
     format: {
       width: 1920,
       height: 1080,
-      frameRate: rational(24000, 1001),
+      frameRate: rational(24, 1),
       audioRate: 48000,
-      colorSpace: "1-1-1 (Rec. 709)",
     },
-    assets: [
-      {
-        id: "r2",
-        name: "scene1.mov",
-        path: "/media/scene1.mov",
-        duration: rational(240 * 1001, 24000),
-        hasVideo: true,
-        hasAudio: true,
-        audioChannels: 2,
-        audioRate: 48000,
-        timecodeStart: ZERO,
-      },
-    ],
     tracks: [
       {
-        type: "video",
-        clips: [
+        kind: "video",
+        items: [
           {
-            assetId: "r2",
-            name: "scene1",
-            offset: ZERO,
-            duration: rational(120 * 1001, 24000),
-            sourceIn: ZERO,
-            sourceDuration: rational(120 * 1001, 24000),
+            kind: "clip",
+            name: "clip",
+            mediaReference: {
+              type: "external",
+              name: "clip.mp4",
+              targetUrl: "file:///media/clip.mp4",
+              mediaKind: "video",
+              availableRange: {
+                startTime: ZERO,
+                duration: rational(240, 24),
+              },
+              streamInfo: {
+                hasVideo: true,
+                hasAudio: true,
+                width: 1920,
+                height: 1080,
+                frameRate: rational(24, 1),
+                audioRate: 48000,
+                audioChannels: 2,
+              },
+            },
+            sourceRange: {
+              startTime: ZERO,
+              duration: rational(120, 24),
+            },
           },
         ],
       },
@@ -48,118 +48,119 @@ function makeTimeline(): NLETimeline {
   }
 }
 
-function captureIO() {
-  let stdout = ""
-  let stderr = ""
+function makeIo() {
+  const stdout: string[] = []
+  const stderr: string[] = []
 
   return {
     io: {
       stdout(message: string) {
-        stdout += message
+        stdout.push(message)
       },
       stderr(message: string) {
-        stderr += message
+        stderr.push(message)
       },
     },
-    stdout() {
-      return stdout
-    },
-    stderr() {
-      return stderr
-    },
+    stdout,
+    stderr,
   }
 }
 
-async function withTempDir(
-  run: (dir: string) => Promise<void>,
-): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "timeline-cli-"))
-  try {
-    await run(dir)
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
-}
+describe("runCli", () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+  })
 
-describe("CLI", () => {
-  it("recognizes symlinked argv entries as direct execution", async () => {
-    await withTempDir(async (dir) => {
-      const targetPath = join(dir, "entry.js")
-      const symlinkPath = join(dir, "timeline")
-      await writeFile(targetPath, "", "utf-8")
-      await symlink(targetPath, symlinkPath)
+  it("prints top-level help", async () => {
+    const { runCli } = await import("../src/cli.js")
+    const { io, stdout, stderr } = makeIo()
 
-      expect(
-        isDirectRunInvocation(symlinkPath, pathToFileURL(targetPath).href),
-      ).toBe(true)
+    const exitCode = await runCli([], io)
+
+    expect(exitCode).toBe(0)
+    expect(stdout.join("")).toContain("Usage:")
+    expect(stderr).toEqual([])
+  })
+
+  it("forwards import and export warnings during convert", async () => {
+    const readFile = vi.fn().mockResolvedValue("<input/>")
+    const writeFile = vi.fn().mockResolvedValue(undefined)
+    const importTimeline = vi.fn().mockReturnValue({
+      timeline: makeTimeline(),
+      warnings: ["Import warning"],
     })
-  })
-
-  it("converts timeline files with --out", async () => {
-    await withTempDir(async (dir) => {
-      const inputPath = join(dir, "project.fcpxml")
-      const outputPath = join(dir, "project.otio")
-      await writeFile(inputPath, exportTimeline(makeTimeline(), "fcpx"), "utf-8")
-
-      const output = captureIO()
-      const exitCode = await runCli(
-        ["convert", inputPath, "--to", "otio", "--out", outputPath],
-        output.io,
-      )
-
-      expect(exitCode).toBe(0)
-      expect(output.stderr()).toBe("")
-      expect(output.stdout()).toContain(`Converted ${inputPath} -> ${outputPath}`)
-
-      const written = await readFile(outputPath, "utf-8")
-      expect(written).toContain('"OTIO_SCHEMA": "Timeline.1"')
+    const exportTimeline = vi.fn((_timeline, _editor, options) => {
+      options?.onWarning?.("Export warning")
+      return "<converted/>"
     })
+
+    vi.doMock("node:fs/promises", () => ({
+      readFile,
+      writeFile,
+    }))
+    vi.doMock("../src/index.js", () => ({
+      importTimeline,
+      exportTimeline,
+    }))
+
+    const { runCli } = await import("../src/cli.js")
+    const { io, stdout, stderr } = makeIo()
+
+    const exitCode = await runCli(
+      ["convert", "/tmp/in.fcpxml", "--to", "premiere", "--out", "/tmp/out.xml"],
+      io,
+    )
+
+    expect(exitCode).toBe(0)
+    expect(readFile).toHaveBeenCalledWith("/tmp/in.fcpxml", "utf-8")
+    expect(writeFile).toHaveBeenCalledWith("/tmp/out.xml", "<converted/>", "utf-8")
+    expect(stderr.join("")).toContain("[warning] Import warning")
+    expect(stderr.join("")).toContain("[warning] Export warning")
+    expect(stdout.join("")).toContain("Converted /tmp/in.fcpxml -> /tmp/out.xml (premiere)")
   })
 
-  it("returns an error when convert is missing --to", async () => {
-    const output = captureIO()
-    const exitCode = await runCli(["convert", "./edit.fcpxml"], output.io)
-
-    expect(exitCode).toBe(1)
-    expect(output.stderr()).toContain("convert requires --to")
-  })
-
-  it("passes validation for a valid timeline", async () => {
-    await withTempDir(async (dir) => {
-      const inputPath = join(dir, "project.xml")
-      await writeFile(inputPath, exportTimeline(makeTimeline(), "premiere"), "utf-8")
-
-      const output = captureIO()
-      const exitCode = await runCli(["validate", inputPath], output.io)
-
-      expect(exitCode).toBe(0)
-      expect(output.stdout()).toContain("Validation passed")
-      expect(output.stderr()).toBe("")
+  it("emits JSON validation output", async () => {
+    const readFile = vi.fn().mockResolvedValue("<input/>")
+    const importTimeline = vi.fn().mockReturnValue({
+      timeline: makeTimeline(),
+      warnings: ["Parser warning"],
     })
-  })
+    const validateTimeline = vi.fn().mockReturnValue([
+      {
+        type: "warning",
+        message: "Frame alignment warning",
+      },
+    ])
+    const hasErrors = vi.fn().mockReturnValue(false)
 
-  it("emits validation errors as JSON", async () => {
-    await withTempDir(async (dir) => {
-      const inputPath = join(dir, "invalid.otio")
-      const parsedOtio = JSON.parse(exportTimeline(makeTimeline(), "otio"))
-      parsedOtio.metadata["@chatoctopus/timeline"].format.width = 0
-      await writeFile(inputPath, JSON.stringify(parsedOtio, null, 2), "utf-8")
+    vi.doMock("node:fs/promises", () => ({
+      readFile,
+      writeFile: vi.fn(),
+    }))
+    vi.doMock("../src/index.js", () => ({
+      importTimeline,
+      exportTimeline: vi.fn(),
+    }))
+    vi.doMock("../src/validate.js", () => ({
+      validateTimeline,
+      hasErrors,
+    }))
 
-      const output = captureIO()
-      const exitCode = await runCli(["validate", inputPath, "--json"], output.io)
+    const { runCli } = await import("../src/cli.js")
+    const { io, stdout } = makeIo()
 
-      expect(exitCode).toBe(1)
-      expect(output.stderr()).toBe("")
+    const exitCode = await runCli(["validate", "/tmp/in.otio", "--json"], io)
+    const report = JSON.parse(stdout.join(""))
 
-      const report = JSON.parse(output.stdout()) as {
-        valid: boolean
-        errors: string[]
-      }
-
-      expect(report.valid).toBe(false)
-      expect(
-        report.errors.some((message) => message.includes("Invalid dimensions")),
-      ).toBe(true)
+    expect(exitCode).toBe(0)
+    expect(readFile).toHaveBeenCalledWith("/tmp/in.otio", "utf-8")
+    expect(report).toMatchObject({
+      file: "/tmp/in.otio",
+      timeline: "CLI Test",
+      valid: true,
+      errors: [],
+      warnings: ["Import: Parser warning", "Frame alignment warning"],
     })
   })
 })

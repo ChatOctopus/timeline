@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest"
 import { writeFCPXML } from "../src/fcpxml/writer.js"
 import { writeXMEML } from "../src/xmeml/writer.js"
 import { writeOTIO } from "../src/otio/writer.js"
-import type { NLETimeline } from "../src/types.js"
+import type { ExternalReference, Timeline } from "../src/types.js"
 import { rational, ZERO } from "../src/time.js"
 
 const FRAME_RATE = rational(30000, 1001)
@@ -11,113 +11,114 @@ function frames(frameCount: number) {
   return rational(frameCount * 1001, 30000)
 }
 
+function makeReference(
+  name: string,
+  targetUrl: string,
+  duration: ReturnType<typeof frames>,
+  options?: {
+    mediaKind?: "video" | "audio" | "image"
+    hasAudio?: boolean
+  },
+): ExternalReference {
+  const mediaKind = options?.mediaKind ?? "video"
+  const hasVideo = mediaKind !== "audio"
+  const hasAudio = options?.hasAudio ?? mediaKind !== "image"
+
+  return {
+    type: "external",
+    name,
+    targetUrl,
+    mediaKind,
+    availableRange: {
+      startTime: ZERO,
+      duration,
+    },
+    streamInfo: {
+      hasVideo,
+      hasAudio,
+      width: 1920,
+      height: 1080,
+      frameRate: FRAME_RATE,
+      audioRate: 48000,
+      audioChannels: hasAudio ? 2 : undefined,
+    },
+  }
+}
+
+function makeClip(
+  name: string,
+  mediaReference: ExternalReference,
+  duration: ReturnType<typeof frames>,
+) {
+  return {
+    kind: "clip" as const,
+    name,
+    mediaReference,
+    sourceRange: {
+      startTime: ZERO,
+      duration,
+    },
+  }
+}
+
+function makeTimeline(name: string, tracks: Timeline["tracks"]): Timeline {
+  return {
+    name,
+    format: {
+      width: 1920,
+      height: 1080,
+      frameRate: FRAME_RATE,
+      audioRate: 48000,
+    },
+    tracks,
+  }
+}
+
 describe("known gaps: fcpxml export", () => {
   it("keeps connected clips even when they start in a timeline gap", () => {
-    const timeline: NLETimeline = {
-      name: "Connected Gap Coverage",
-      format: {
-        width: 1920,
-        height: 1080,
-        frameRate: FRAME_RATE,
-        audioRate: 48000,
+    const mainRef = makeReference("main.mov", "/media/main.mov", frames(600))
+    const overlayRef = makeReference("overlay.mov", "/media/overlay.mov", frames(600))
+    const timeline = makeTimeline("Connected Gap Coverage", [
+      {
+        kind: "video",
+        items: [makeClip("main", mainRef, frames(150))],
       },
-      assets: [
-        {
-          id: "r2",
-          name: "main.mov",
-          path: "/media/main.mov",
-          duration: frames(600),
-          hasVideo: true,
-          hasAudio: true,
-          audioChannels: 2,
-          audioRate: 48000,
-          timecodeStart: ZERO,
-        },
-        {
-          id: "r3",
-          name: "overlay.mov",
-          path: "/media/overlay.mov",
-          duration: frames(600),
-          hasVideo: true,
-          hasAudio: true,
-          audioChannels: 2,
-          audioRate: 48000,
-          timecodeStart: ZERO,
-        },
-      ],
-      tracks: [
-        {
-          type: "video",
-          clips: [
-            {
-              assetId: "r2",
-              name: "main",
-              offset: ZERO,
-              duration: frames(150),
-              sourceIn: ZERO,
-              sourceDuration: frames(150),
+      {
+        kind: "video",
+        items: [
+          {
+            kind: "gap",
+            sourceRange: {
+              startTime: ZERO,
+              duration: frames(210),
             },
-          ],
-        },
-        {
-          type: "video",
-          clips: [
-            {
-              assetId: "r3",
-              name: "LATE_OVERLAY_SENTINEL",
-              offset: frames(210),
-              duration: frames(60),
-              sourceIn: ZERO,
-              sourceDuration: frames(60),
-              lane: 1,
-            },
-          ],
-        },
-      ],
-    }
+          },
+          makeClip("LATE_OVERLAY_SENTINEL", overlayRef, frames(60)),
+        ],
+      },
+    ])
 
     const xml = writeFCPXML(timeline)
     expect(xml).toContain('name="LATE_OVERLAY_SENTINEL"')
   })
 
   it("percent-encodes reserved characters in asset file URLs", () => {
-    const timeline: NLETimeline = {
-      name: "FCPXML URL Encoding",
-      format: {
-        width: 1920,
-        height: 1080,
-        frameRate: FRAME_RATE,
-        audioRate: 48000,
+    const timeline = makeTimeline("FCPXML URL Encoding", [
+      {
+        kind: "video",
+        items: [
+          makeClip(
+            "url-test",
+            makeReference(
+              "shot #1?.mov",
+              "/Volumes/Media Drive/shot #1?.mov",
+              frames(300),
+            ),
+            frames(120),
+          ),
+        ],
       },
-      assets: [
-        {
-          id: "r-url-fcpx",
-          name: "shot #1?.mov",
-          path: "/Volumes/Media Drive/shot #1?.mov",
-          duration: frames(300),
-          hasVideo: true,
-          hasAudio: true,
-          audioChannels: 2,
-          audioRate: 48000,
-          timecodeStart: ZERO,
-        },
-      ],
-      tracks: [
-        {
-          type: "video",
-          clips: [
-            {
-              assetId: "r-url-fcpx",
-              name: "url-test",
-              offset: ZERO,
-              duration: frames(120),
-              sourceIn: ZERO,
-              sourceDuration: frames(120),
-            },
-          ],
-        },
-      ],
-    }
+    ])
 
     const xml = writeFCPXML(timeline)
     expect(xml).toContain(
@@ -128,153 +129,58 @@ describe("known gaps: fcpxml export", () => {
 
 describe("known gaps: xmeml export", () => {
   it("exports clipitems for explicit audio tracks even when no video tracks exist", () => {
-    const timeline: NLETimeline = {
-      name: "Audio Only XMEML",
-      format: {
-        width: 1920,
-        height: 1080,
-        frameRate: FRAME_RATE,
-        audioRate: 48000,
+    const timeline = makeTimeline("Audio Only XMEML", [
+      {
+        kind: "audio",
+        items: [
+          makeClip(
+            "AUDIO_TRACK_SENTINEL",
+            makeReference("music.wav", "/audio/music.wav", frames(600), {
+              mediaKind: "audio",
+            }),
+            frames(120),
+          ),
+        ],
       },
-      assets: [
-        {
-          id: "r-a1",
-          name: "music.wav",
-          path: "/audio/music.wav",
-          duration: frames(600),
-          hasVideo: false,
-          hasAudio: true,
-          audioChannels: 2,
-          audioRate: 48000,
-          timecodeStart: ZERO,
-        },
-      ],
-      tracks: [
-        {
-          type: "audio",
-          clips: [
-            {
-              assetId: "r-a1",
-              name: "AUDIO_TRACK_SENTINEL",
-              offset: ZERO,
-              duration: frames(120),
-              sourceIn: ZERO,
-              sourceDuration: frames(120),
-            },
-          ],
-        },
-      ],
-    }
+    ])
 
     const xml = writeXMEML(timeline)
     expect(xml).toContain("AUDIO_TRACK_SENTINEL")
   })
 
   it("preserves source track indexes for secondary video tracks", () => {
-    const timeline: NLETimeline = {
-      name: "Track Index Coverage",
-      format: {
-        width: 1920,
-        height: 1080,
-        frameRate: FRAME_RATE,
-        audioRate: 48000,
+    const timeline = makeTimeline("Track Index Coverage", [
+      {
+        kind: "video",
+        items: [makeClip("v1", makeReference("v1.mov", "/video/v1.mov", frames(600)), frames(120))],
       },
-      assets: [
-        {
-          id: "r-v1",
-          name: "v1.mov",
-          path: "/video/v1.mov",
-          duration: frames(600),
-          hasVideo: true,
-          hasAudio: true,
-          audioChannels: 2,
-          audioRate: 48000,
-          timecodeStart: ZERO,
-        },
-        {
-          id: "r-v2",
-          name: "v2.mov",
-          path: "/video/v2.mov",
-          duration: frames(600),
-          hasVideo: true,
-          hasAudio: true,
-          audioChannels: 2,
-          audioRate: 48000,
-          timecodeStart: ZERO,
-        },
-      ],
-      tracks: [
-        {
-          type: "video",
-          clips: [
-            {
-              assetId: "r-v1",
-              name: "v1",
-              offset: ZERO,
-              duration: frames(120),
-              sourceIn: ZERO,
-              sourceDuration: frames(120),
-            },
-          ],
-        },
-        {
-          type: "video",
-          clips: [
-            {
-              assetId: "r-v2",
-              name: "v2",
-              offset: ZERO,
-              duration: frames(120),
-              sourceIn: ZERO,
-              sourceDuration: frames(120),
-            },
-          ],
-        },
-      ],
-    }
+      {
+        kind: "video",
+        items: [makeClip("v2", makeReference("v2.mov", "/video/v2.mov", frames(600)), frames(120))],
+      },
+    ])
 
     const xml = writeXMEML(timeline)
     expect(xml).toContain("<trackindex>2</trackindex>")
   })
 
   it("percent-encodes reserved characters in pathurl", () => {
-    const timeline: NLETimeline = {
-      name: "XMEML URL Encoding",
-      format: {
-        width: 1920,
-        height: 1080,
-        frameRate: FRAME_RATE,
-        audioRate: 48000,
+    const timeline = makeTimeline("XMEML URL Encoding", [
+      {
+        kind: "video",
+        items: [
+          makeClip(
+            "url-test",
+            makeReference(
+              "shot #1?.mov",
+              "/Volumes/Media Drive/shot #1?.mov",
+              frames(300),
+            ),
+            frames(120),
+          ),
+        ],
       },
-      assets: [
-        {
-          id: "r-url-xmeml",
-          name: "shot #1?.mov",
-          path: "/Volumes/Media Drive/shot #1?.mov",
-          duration: frames(300),
-          hasVideo: true,
-          hasAudio: true,
-          audioChannels: 2,
-          audioRate: 48000,
-          timecodeStart: ZERO,
-        },
-      ],
-      tracks: [
-        {
-          type: "video",
-          clips: [
-            {
-              assetId: "r-url-xmeml",
-              name: "url-test",
-              offset: ZERO,
-              duration: frames(120),
-              sourceIn: ZERO,
-              sourceDuration: frames(120),
-            },
-          ],
-        },
-      ],
-    }
+    ])
 
     const xml = writeXMEML(timeline)
     expect(xml).toContain(
@@ -285,43 +191,22 @@ describe("known gaps: xmeml export", () => {
 
 describe("known gaps: otio export", () => {
   it("percent-encodes target_url paths in media references", () => {
-    const timeline: NLETimeline = {
-      name: "OTIO URL Encoding",
-      format: {
-        width: 1920,
-        height: 1080,
-        frameRate: FRAME_RATE,
-        audioRate: 48000,
+    const timeline = makeTimeline("OTIO URL Encoding", [
+      {
+        kind: "video",
+        items: [
+          makeClip(
+            "url-test",
+            makeReference(
+              "shot 01.mov",
+              "/Volumes/Media Drive/shot 01.mov",
+              frames(300),
+            ),
+            frames(120),
+          ),
+        ],
       },
-      assets: [
-        {
-          id: "r-url-1",
-          name: "shot 01.mov",
-          path: "/Volumes/Media Drive/shot 01.mov",
-          duration: frames(300),
-          hasVideo: true,
-          hasAudio: true,
-          audioChannels: 2,
-          audioRate: 48000,
-          timecodeStart: ZERO,
-        },
-      ],
-      tracks: [
-        {
-          type: "video",
-          clips: [
-            {
-              assetId: "r-url-1",
-              name: "url-test",
-              offset: ZERO,
-              duration: frames(120),
-              sourceIn: ZERO,
-              sourceDuration: frames(120),
-            },
-          ],
-        },
-      ],
-    }
+    ])
 
     const otio = JSON.parse(writeOTIO(timeline))
     const targetUrl =
@@ -332,43 +217,22 @@ describe("known gaps: otio export", () => {
   })
 
   it("percent-encodes reserved characters in target_url", () => {
-    const timeline: NLETimeline = {
-      name: "OTIO Reserved URL Encoding",
-      format: {
-        width: 1920,
-        height: 1080,
-        frameRate: FRAME_RATE,
-        audioRate: 48000,
+    const timeline = makeTimeline("OTIO Reserved URL Encoding", [
+      {
+        kind: "video",
+        items: [
+          makeClip(
+            "url-test",
+            makeReference(
+              "shot #1?.mov",
+              "/Volumes/Media Drive/shot #1?.mov",
+              frames(300),
+            ),
+            frames(120),
+          ),
+        ],
       },
-      assets: [
-        {
-          id: "r-url-2",
-          name: "shot #1?.mov",
-          path: "/Volumes/Media Drive/shot #1?.mov",
-          duration: frames(300),
-          hasVideo: true,
-          hasAudio: true,
-          audioChannels: 2,
-          audioRate: 48000,
-          timecodeStart: ZERO,
-        },
-      ],
-      tracks: [
-        {
-          type: "video",
-          clips: [
-            {
-              assetId: "r-url-2",
-              name: "url-test",
-              offset: ZERO,
-              duration: frames(120),
-              sourceIn: ZERO,
-              sourceDuration: frames(120),
-            },
-          ],
-        },
-      ],
-    }
+    ])
 
     const otio = JSON.parse(writeOTIO(timeline))
     const targetUrl =

@@ -112,48 +112,6 @@ export interface Timeline {
 }
 
 /**
- * Legacy adapter-facing types. These remain in place temporarily while the
- * format adapters are migrated to the OTIO-first core model.
- */
-export interface NLEAsset {
-  id: string
-  name: string
-  path: string
-  duration: Rational
-  hasVideo: boolean
-  hasAudio: boolean
-  videoFormat?: NLEFormat
-  audioChannels?: number
-  audioRate?: number
-  timecodeStart?: Rational
-}
-
-export interface NLEClip {
-  assetId: string
-  name: string
-  offset: Rational
-  duration: Rational
-  sourceIn: Rational
-  sourceDuration: Rational
-  lane?: number
-  audioRole?: string
-  volume?: number
-  enabled?: boolean
-}
-
-export interface NLETrack {
-  type: "video" | "audio"
-  clips: NLEClip[]
-}
-
-export interface NLETimeline {
-  name: string
-  format: NLEFormat
-  tracks: NLETrack[]
-  assets: NLEAsset[]
-}
-
-/**
  * Simplified input for building a timeline from a list of clips.
  * Offsets are computed automatically by sequencing clips in order within each track.
  */

@@ -240,6 +240,61 @@ describe("readXMEML", () => {
     })
   })
 
+  it("preserves still-image media references as image clips", () => {
+    const xml = writeXMEML(
+      makeTimeline({
+        tracks: [
+          {
+            kind: "video",
+            items: [
+              {
+                kind: "clip",
+                name: "slide",
+                mediaReference: {
+                  type: "external",
+                  name: "slide.png",
+                  targetUrl: "file:///slides/slide.png",
+                  mediaKind: "image",
+                  availableRange: {
+                    startTime: ZERO,
+                    duration: rational(90 * 1001, 30000),
+                  },
+                  streamInfo: {
+                    hasVideo: true,
+                    hasAudio: false,
+                    width: 1920,
+                    height: 1080,
+                    frameRate: rational(30000, 1001),
+                  },
+                },
+                sourceRange: {
+                  startTime: ZERO,
+                  duration: rational(90 * 1001, 30000),
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    )
+
+    const { timeline } = readXMEML(xml)
+    const videoTrack = timeline.tracks.find((track) => track.kind === "video")
+    const clip = expectClip(videoTrack!.items[0])
+
+    expect(clip.mediaReference.type).toBe("external")
+    if (clip.mediaReference.type !== "external") {
+      throw new Error("expected external reference")
+    }
+
+    expect(clip.mediaReference.mediaKind).toBe("image")
+    expect(clip.mediaReference.targetUrl).toBe("file:///slides/slide.png")
+    expect(clip.mediaReference.streamInfo).toMatchObject({
+      hasVideo: true,
+      hasAudio: false,
+    })
+  })
+
   it("throws on invalid XML", () => {
     expect(() => readXMEML("<html>not xmeml</html>")).toThrow("Invalid xmeml")
   })

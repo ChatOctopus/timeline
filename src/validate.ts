@@ -5,9 +5,6 @@ import type {
   Gap,
   Transition,
   MediaReference,
-  NLETimeline,
-  NLEClip,
-  NLEAsset,
   Rational,
 } from "./types.js"
 import { ZERO, toSeconds, toFrames, frameDuration, isZero, add } from "./time.js"
@@ -16,12 +13,6 @@ export interface ValidationError {
   type: "error" | "warning"
   message: string
   clip?: string
-}
-
-function isCoreTimeline(timeline: Timeline | NLETimeline): timeline is Timeline {
-  if (!("tracks" in timeline) || !Array.isArray(timeline.tracks)) return false
-  if (!("assets" in timeline)) return true
-  return timeline.tracks.some((track) => "items" in track)
 }
 
 function compareRationals(a: Rational, b: Rational): number {
@@ -203,105 +194,11 @@ function validateCoreTimeline(timeline: Timeline, errors: ValidationError[]): vo
   }
 }
 
-function validateLegacyClip(
-  clip: NLEClip,
-  assetMap: Map<string, NLEAsset>,
-  frameRate: Rational,
-  errors: ValidationError[],
-): void {
-  if (!assetMap.has(clip.assetId)) {
-    errors.push({
-      type: "error",
-      message: `Clip "${clip.name}" references unknown asset "${clip.assetId}"`,
-      clip: clip.name,
-    })
-  }
-
-  if (isZero(clip.duration)) {
-    errors.push({
-      type: "warning",
-      message: `Clip "${clip.name}" has zero duration`,
-      clip: clip.name,
-    })
-  }
-
-  if (toSeconds(clip.duration) < 0) {
-    errors.push({
-      type: "error",
-      message: `Clip "${clip.name}" has negative duration`,
-      clip: clip.name,
-    })
-  }
-
-  if (toSeconds(clip.sourceIn) < 0) {
-    errors.push({
-      type: "error",
-      message: `Clip "${clip.name}" has negative sourceIn`,
-      clip: clip.name,
-    })
-  }
-
-  if (toSeconds(clip.sourceDuration) < 0) {
-    errors.push({
-      type: "error",
-      message: `Clip "${clip.name}" has negative sourceDuration`,
-      clip: clip.name,
-    })
-  }
-
-  const asset = assetMap.get(clip.assetId)
-  if (asset && !isZero(asset.duration)) {
-    const sourceEnd = toSeconds(add(clip.sourceIn, clip.sourceDuration))
-    const assetDur = toSeconds(asset.duration)
-    if (sourceEnd > assetDur + 0.001) {
-      errors.push({
-        type: "error",
-        message: `Clip "${clip.name}" source range exceeds asset duration (${sourceEnd.toFixed(3)}s > ${assetDur.toFixed(3)}s)`,
-        clip: clip.name,
-      })
-    }
-  }
-
-  warnIfNotFrameAligned(
-    clip.duration,
-    frameRate,
-    errors,
-    `Clip "${clip.name}" duration may not be frame-aligned`,
-    clip.name,
-  )
-}
-
-function validateLegacyTimeline(timeline: NLETimeline, errors: ValidationError[]): void {
-  const assetMap = new Map(timeline.assets.map((a) => [a.id, a]))
-
-  for (const track of timeline.tracks) {
-    for (const clip of track.clips) {
-      validateLegacyClip(clip, assetMap, timeline.format.frameRate, errors)
-    }
-  }
-
-  for (const asset of timeline.assets) {
-    if (!asset.path) {
-      errors.push({
-        type: "error",
-        message: `Asset "${asset.name}" has no file path`,
-      })
-    }
-
-    if (isZero(asset.duration) && asset.hasVideo) {
-      errors.push({
-        type: "warning",
-        message: `Video asset "${asset.name}" has zero duration`,
-      })
-    }
-  }
-}
-
 /**
  * Validate a timeline for correctness before export.
  * Returns an array of errors/warnings. Empty array means valid.
  */
-export function validateTimeline(timeline: Timeline | NLETimeline): ValidationError[] {
+export function validateTimeline(timeline: Timeline): ValidationError[] {
   const errors: ValidationError[] = []
 
   if (!timeline.name) {
@@ -325,11 +222,7 @@ export function validateTimeline(timeline: Timeline | NLETimeline): ValidationEr
     })
   }
 
-  if (isCoreTimeline(timeline)) {
-    validateCoreTimeline(timeline, errors)
-  } else {
-    validateLegacyTimeline(timeline, errors)
-  }
+  validateCoreTimeline(timeline, errors)
 
   return errors
 }
@@ -344,31 +237,18 @@ export function hasErrors(results: ValidationError[]): boolean {
 /**
  * Compute total timeline duration from all tracks.
  */
-export function computeTimelineDuration(timeline: Timeline | NLETimeline): Rational {
+export function computeTimelineDuration(timeline: Timeline): Rational {
   let maxEnd: Rational = ZERO
 
-  if (isCoreTimeline(timeline)) {
-    for (const track of timeline.tracks) {
-      let current = ZERO
+  for (const track of timeline.tracks) {
+    let current = ZERO
 
-      for (const item of track.items) {
-        current = add(current, durationFromItem(item))
-      }
-
-      if (toSeconds(current) > toSeconds(maxEnd)) {
-        maxEnd = current
-      }
+    for (const item of track.items) {
+      current = add(current, durationFromItem(item))
     }
 
-    return maxEnd
-  }
-
-  for (const track of timeline.tracks) {
-    for (const clip of track.clips) {
-      const clipEnd = add(clip.offset, clip.duration)
-      if (toSeconds(clipEnd) > toSeconds(maxEnd)) {
-        maxEnd = clipEnd
-      }
+    if (toSeconds(current) > toSeconds(maxEnd)) {
+      maxEnd = current
     }
   }
 

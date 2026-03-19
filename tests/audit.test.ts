@@ -6,7 +6,7 @@ import { readXMEML } from "../src/xmeml/reader.js"
 import { writeOTIO } from "../src/otio/writer.js"
 import { readOTIO } from "../src/otio/reader.js"
 import { validateTimeline } from "../src/validate.js"
-import type { NLETimeline } from "../src/types.js"
+import type { ExternalReference, Timeline } from "../src/types.js"
 import { rational, ZERO, toSeconds } from "../src/time.js"
 
 function extractClips(timeline: { tracks: Array<{ items: Array<{ kind: string; name?: string }> }> }) {
@@ -15,7 +15,60 @@ function extractClips(timeline: { tracks: Array<{ items: Array<{ kind: string; n
   )
 }
 
-function makeMultiTrackTimeline(): NLETimeline {
+function makeReference(
+  name: string,
+  targetUrl: string,
+  duration: { num: number; den: number },
+  options?: {
+    mediaKind?: "video" | "audio" | "image"
+    frameRate?: { num: number; den: number }
+    hasAudio?: boolean
+  },
+): ExternalReference {
+  const mediaKind = options?.mediaKind ?? "video"
+  const frameRate = options?.frameRate ?? rational(30000, 1001)
+  const hasVideo = mediaKind !== "audio"
+  const hasAudio = options?.hasAudio ?? mediaKind !== "image"
+
+  return {
+    type: "external",
+    name,
+    targetUrl,
+    mediaKind,
+    availableRange: {
+      startTime: ZERO,
+      duration,
+    },
+    streamInfo: {
+      hasVideo,
+      hasAudio,
+      width: 1920,
+      height: 1080,
+      frameRate,
+      audioRate: 48000,
+      audioChannels: hasAudio ? 2 : undefined,
+    },
+  }
+}
+
+function makeClip(
+  name: string,
+  mediaReference: ExternalReference,
+  startTime: { num: number; den: number },
+  duration: { num: number; den: number },
+) {
+  return {
+    kind: "clip" as const,
+    name,
+    mediaReference,
+    sourceRange: {
+      startTime,
+      duration,
+    },
+  }
+}
+
+function makeMultiTrackTimeline(): Timeline {
   return {
     name: "Multi-Track",
     format: {
@@ -24,68 +77,42 @@ function makeMultiTrackTimeline(): NLETimeline {
       frameRate: rational(30000, 1001),
       audioRate: 48000,
     },
-    assets: [
-      {
-        id: "r2",
-        name: "main.mp4",
-        path: "/footage/main.mp4",
-        duration: rational(300 * 1001, 30000),
-        hasVideo: true,
-        hasAudio: true,
-        videoFormat: {
-          width: 1920,
-          height: 1080,
-          frameRate: rational(30000, 1001),
-          audioRate: 48000,
-        },
-        audioChannels: 2,
-        audioRate: 48000,
-        timecodeStart: ZERO,
-      },
-      {
-        id: "r3",
-        name: "overlay.mp4",
-        path: "/footage/overlay.mp4",
-        duration: rational(150 * 1001, 30000),
-        hasVideo: true,
-        hasAudio: true,
-        videoFormat: {
-          width: 1920,
-          height: 1080,
-          frameRate: rational(30000, 1001),
-          audioRate: 48000,
-        },
-        audioChannels: 2,
-        audioRate: 48000,
-        timecodeStart: ZERO,
-      },
-    ],
     tracks: [
       {
-        type: "video",
-        clips: [
-          {
-            assetId: "r2",
-            name: "main",
-            offset: ZERO,
-            duration: rational(300 * 1001, 30000),
-            sourceIn: ZERO,
-            sourceDuration: rational(300 * 1001, 30000),
-          },
+        kind: "video",
+        items: [
+          makeClip(
+            "main",
+            makeReference(
+              "main.mp4",
+              "/footage/main.mp4",
+              rational(300 * 1001, 30000),
+            ),
+            ZERO,
+            rational(300 * 1001, 30000),
+          ),
         ],
       },
       {
-        type: "video",
-        clips: [
+        kind: "video",
+        items: [
           {
-            assetId: "r3",
-            name: "overlay",
-            offset: rational(60 * 1001, 30000),
-            duration: rational(150 * 1001, 30000),
-            sourceIn: ZERO,
-            sourceDuration: rational(150 * 1001, 30000),
-            lane: 1,
+            kind: "gap",
+            sourceRange: {
+              startTime: ZERO,
+              duration: rational(60 * 1001, 30000),
+            },
           },
+          makeClip(
+            "overlay",
+            makeReference(
+              "overlay.mp4",
+              "/footage/overlay.mp4",
+              rational(150 * 1001, 30000),
+            ),
+            ZERO,
+            rational(150 * 1001, 30000),
+          ),
         ],
       },
     ],
@@ -221,7 +248,7 @@ describe("audit: multi-track preservation (High #1)", () => {
 
 describe("audit: OTIO timing fidelity (High #2)", () => {
   it("reader preserves 23.976fps timing precisely", () => {
-    const timeline: NLETimeline = {
+    const timeline: Timeline = {
       name: "NTSC Precision",
       format: {
         width: 1920,
@@ -229,31 +256,23 @@ describe("audit: OTIO timing fidelity (High #2)", () => {
         frameRate: rational(24000, 1001),
         audioRate: 48000,
       },
-      assets: [
-        {
-          id: "r2",
-          name: "clip.mp4",
-          path: "/video/clip.mp4",
-          duration: rational(240 * 1001, 24000),
-          hasVideo: true,
-          hasAudio: true,
-          audioChannels: 2,
-          audioRate: 48000,
-          timecodeStart: ZERO,
-        },
-      ],
       tracks: [
         {
-          type: "video",
-          clips: [
-            {
-              assetId: "r2",
-              name: "clip",
-              offset: ZERO,
-              duration: rational(120 * 1001, 24000),
-              sourceIn: rational(24 * 1001, 24000),
-              sourceDuration: rational(120 * 1001, 24000),
-            },
+          kind: "video",
+          items: [
+            makeClip(
+              "clip",
+              makeReference(
+                "clip.mp4",
+                "/video/clip.mp4",
+                rational(240 * 1001, 24000),
+                {
+                  frameRate: rational(24000, 1001),
+                },
+              ),
+              rational(24 * 1001, 24000),
+              rational(120 * 1001, 24000),
+            ),
           ],
         },
       ],
@@ -262,7 +281,11 @@ describe("audit: OTIO timing fidelity (High #2)", () => {
     const json = writeOTIO(timeline)
     const { timeline: imported } = readOTIO(json)
 
-    const origClip = timeline.tracks[0].clips[0]
+    const origClip = timeline.tracks[0].items[0]
+    expect(origClip.kind).toBe("clip")
+    if (origClip.kind !== "clip") {
+      throw new Error("expected clip")
+    }
     const importedClip = imported.tracks[0].items[0]
     expect(importedClip.kind).toBe("clip")
     if (importedClip.kind !== "clip") {
@@ -270,17 +293,17 @@ describe("audit: OTIO timing fidelity (High #2)", () => {
     }
 
     expect(toSeconds(importedClip.sourceRange?.duration ?? ZERO)).toBeCloseTo(
-      toSeconds(origClip.sourceDuration),
+      toSeconds(origClip.sourceRange?.duration ?? ZERO),
       3,
     )
     expect(toSeconds(importedClip.sourceRange?.startTime ?? ZERO)).toBeCloseTo(
-      toSeconds(origClip.sourceIn),
+      toSeconds(origClip.sourceRange?.startTime ?? ZERO),
       3,
     )
   })
 
   it("writer uses asset-native rate for source_range and available_range", () => {
-    const timeline: NLETimeline = {
+    const timeline: Timeline = {
       name: "Mixed Rate",
       format: {
         width: 1920,
@@ -288,37 +311,23 @@ describe("audit: OTIO timing fidelity (High #2)", () => {
         frameRate: rational(30000, 1001),
         audioRate: 48000,
       },
-      assets: [
-        {
-          id: "r2",
-          name: "clip24p.mp4",
-          path: "/video/clip24p.mp4",
-          duration: rational(240, 24),
-          hasVideo: true,
-          hasAudio: true,
-          videoFormat: {
-            width: 1920,
-            height: 1080,
-            frameRate: rational(24, 1),
-            audioRate: 48000,
-          },
-          audioChannels: 2,
-          audioRate: 48000,
-          timecodeStart: ZERO,
-        },
-      ],
       tracks: [
         {
-          type: "video",
-          clips: [
-            {
-              assetId: "r2",
-              name: "clip24p",
-              offset: ZERO,
-              duration: rational(150 * 1001, 30000),
-              sourceIn: rational(48, 24),
-              sourceDuration: rational(150 * 1001, 30000),
-            },
+          kind: "video",
+          items: [
+            makeClip(
+              "clip24p",
+              makeReference(
+                "clip24p.mp4",
+                "/video/clip24p.mp4",
+                rational(240, 24),
+                {
+                  frameRate: rational(24, 1),
+                },
+              ),
+              rational(48, 24),
+              rational(150 * 1001, 30000),
+            ),
           ],
         },
       ],
@@ -335,7 +344,7 @@ describe("audit: OTIO timing fidelity (High #2)", () => {
   })
 
   it("mixed-rate roundtrip preserves source timing", () => {
-    const timeline: NLETimeline = {
+    const timeline: Timeline = {
       name: "Mixed Rate RT",
       format: {
         width: 1920,
@@ -343,37 +352,23 @@ describe("audit: OTIO timing fidelity (High #2)", () => {
         frameRate: rational(30000, 1001),
         audioRate: 48000,
       },
-      assets: [
-        {
-          id: "r2",
-          name: "clip24p.mp4",
-          path: "/video/clip24p.mp4",
-          duration: rational(240, 24),
-          hasVideo: true,
-          hasAudio: true,
-          videoFormat: {
-            width: 1920,
-            height: 1080,
-            frameRate: rational(24, 1),
-            audioRate: 48000,
-          },
-          audioChannels: 2,
-          audioRate: 48000,
-          timecodeStart: ZERO,
-        },
-      ],
       tracks: [
         {
-          type: "video",
-          clips: [
-            {
-              assetId: "r2",
-              name: "clip24p",
-              offset: ZERO,
-              duration: rational(150 * 1001, 30000),
-              sourceIn: rational(48, 24),
-              sourceDuration: rational(150 * 1001, 30000),
-            },
+          kind: "video",
+          items: [
+            makeClip(
+              "clip24p",
+              makeReference(
+                "clip24p.mp4",
+                "/video/clip24p.mp4",
+                rational(240, 24),
+                {
+                  frameRate: rational(24, 1),
+                },
+              ),
+              rational(48, 24),
+              rational(150 * 1001, 30000),
+            ),
           ],
         },
       ],
@@ -713,7 +708,7 @@ describe("audit: OTIO media reference stability (Medium #2)", () => {
 
 describe("audit: validation source-range checks (Medium #3)", () => {
   it("errors when sourceIn + sourceDuration exceeds asset duration", () => {
-    const timeline: NLETimeline = {
+    const timeline: Timeline = {
       name: "Overrun Test",
       format: {
         width: 1920,
@@ -721,28 +716,18 @@ describe("audit: validation source-range checks (Medium #3)", () => {
         frameRate: rational(24, 1),
         audioRate: 48000,
       },
-      assets: [
-        {
-          id: "r2",
-          name: "clip.mp4",
-          path: "/video/clip.mp4",
-          duration: rational(240, 24),
-          hasVideo: true,
-          hasAudio: true,
-        },
-      ],
       tracks: [
         {
-          type: "video",
-          clips: [
-            {
-              assetId: "r2",
-              name: "overrun",
-              offset: ZERO,
-              duration: rational(120, 24),
-              sourceIn: rational(216, 24),
-              sourceDuration: rational(120, 24),
-            },
+          kind: "video",
+          items: [
+            makeClip(
+              "overrun",
+              makeReference("clip.mp4", "/video/clip.mp4", rational(240, 24), {
+                frameRate: rational(24, 1),
+              }),
+              rational(216, 24),
+              rational(120, 24),
+            ),
           ],
         },
       ],
@@ -759,7 +744,7 @@ describe("audit: validation source-range checks (Medium #3)", () => {
   })
 
   it("errors when sourceIn is beyond asset duration", () => {
-    const timeline: NLETimeline = {
+    const timeline: Timeline = {
       name: "Beyond Duration",
       format: {
         width: 1920,
@@ -767,28 +752,18 @@ describe("audit: validation source-range checks (Medium #3)", () => {
         frameRate: rational(24, 1),
         audioRate: 48000,
       },
-      assets: [
-        {
-          id: "r2",
-          name: "clip.mp4",
-          path: "/video/clip.mp4",
-          duration: rational(240, 24),
-          hasVideo: true,
-          hasAudio: true,
-        },
-      ],
       tracks: [
         {
-          type: "video",
-          clips: [
-            {
-              assetId: "r2",
-              name: "beyond",
-              offset: ZERO,
-              duration: rational(24, 24),
-              sourceIn: rational(480, 24),
-              sourceDuration: rational(24, 24),
-            },
+          kind: "video",
+          items: [
+            makeClip(
+              "beyond",
+              makeReference("clip.mp4", "/video/clip.mp4", rational(240, 24), {
+                frameRate: rational(24, 1),
+              }),
+              rational(480, 24),
+              rational(24, 24),
+            ),
           ],
         },
       ],
