@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process"
+import { basename, resolve } from "node:path"
 import { promisify } from "node:util"
-import type { NLEAsset, NLEFormat, Rational } from "./types.js"
+import type { ExternalReference, MediaKind, Rational } from "./types.js"
 import { rational, ZERO, parseTimecode } from "./time.js"
-import { createHash } from "node:crypto"
+import { toFileUrl } from "./file-url.js"
 
 const exec = promisify(execFile)
 
@@ -47,6 +48,7 @@ function parseFrameRate(rateStr: string): Rational {
   if (parts.length === 2) {
     return rational(parseInt(parts[0], 10), parseInt(parts[1], 10))
   }
+
   const fps = parseFloat(rateStr)
   if (fps === Math.round(fps)) return rational(Math.round(fps), 1)
   return rational(Math.round(fps * 1001), 1001)
@@ -61,6 +63,7 @@ function detectColorSpace(stream: FFProbeStream): string {
   ) {
     return "1-1-1 (Rec. 709)"
   }
+
   return "1-1-1 (Rec. 709)"
 }
 
@@ -84,73 +87,86 @@ function extractTimecodeString(result: FFProbeResult): string | null {
   return null
 }
 
-function deterministicId(absPath: string): string {
-  return "r" + createHash("md5").update(absPath).digest("hex").slice(0, 12)
+function inferMediaKind(
+  filePath: string,
+  videoStream?: FFProbeStream,
+  audioStream?: FFProbeStream,
+): MediaKind {
+  const lower = filePath.toLowerCase()
+
+  if (/\.(png|jpe?g|webp|gif|bmp|tiff?)$/.test(lower)) return "image"
+  if (videoStream) return "video"
+  if (audioStream) return "audio"
+  if (/\.(wav|mp3|m4a|aac|flac|ogg)$/.test(lower)) return "audio"
+  if (/\.(mp4|mov|mkv|avi|webm|mxf)$/.test(lower)) return "video"
+
+  return "unknown"
 }
 
-function deterministicUid(absPath: string): string {
-  const hex = createHash("md5").update(absPath).digest("hex")
-  return [
-    hex.slice(0, 8),
-    hex.slice(8, 12),
-    hex.slice(12, 16),
-    hex.slice(16, 20),
-    hex.slice(20, 32),
-  ].join("-")
+function parseDuration(durationValue: string | undefined, frameRate?: Rational): Rational | undefined {
+  if (!durationValue) return undefined
+
+  const durationSec = parseFloat(durationValue)
+  if (!Number.isFinite(durationSec) || durationSec <= 0) {
+    return undefined
+  }
+
+  if (frameRate) {
+    const fps = frameRate.num / frameRate.den
+    const totalFrames = Math.round(durationSec * fps)
+    return rational(totalFrames * frameRate.den, frameRate.num)
+  }
+
+  return rational(Math.round(durationSec * 1000), 1000)
 }
 
 /**
- * Probe a media file and return an NLEAsset with all metadata populated.
+ * Probe a media file and return an OTIO-first external media reference with
+ * inferred media kind, stream info, and intrinsic available range when present.
  */
-export async function probeAsset(filePath: string): Promise<NLEAsset> {
+export async function probeMediaReference(filePath: string): Promise<ExternalReference> {
   const result = await ffprobe(filePath)
 
-  const videoStream = result.streams.find((s) => s.codec_type === "video")
-  const audioStream = result.streams.find((s) => s.codec_type === "audio")
-
+  const absolutePath = resolve(filePath)
+  const videoStream = result.streams.find((stream) => stream.codec_type === "video")
+  const audioStream = result.streams.find((stream) => stream.codec_type === "audio")
+  const mediaKind = inferMediaKind(absolutePath, videoStream, audioStream)
   const frameRate = videoStream?.r_frame_rate
     ? parseFrameRate(videoStream.r_frame_rate)
-    : rational(24, 1)
-
-  const durationSec = result.format.duration
-    ? parseFloat(result.format.duration)
-    : 0
-
-  const fps = frameRate.num / frameRate.den
-  const totalFrames = Math.round(durationSec * fps)
-  const duration = rational(totalFrames * frameRate.den, frameRate.num)
+    : undefined
+  const duration = mediaKind === "image"
+    ? undefined
+    : parseDuration(result.format.duration, frameRate)
 
   const audioRate = audioStream?.sample_rate
     ? parseInt(audioStream.sample_rate, 10)
     : undefined
-
   const tcString = extractTimecodeString(result)
-  const timecodeStart = tcString ? parseTimecode(tcString, frameRate) : ZERO
-
-  const videoFormat: NLEFormat | undefined = videoStream
-    ? {
-        width: videoStream.width ?? 1920,
-        height: videoStream.height ?? 1080,
-        frameRate,
-        audioRate: audioRate ?? 48000,
-        colorSpace: detectColorSpace(videoStream),
-      }
-    : undefined
-
-  const absPath = filePath.startsWith("/")
-    ? filePath
-    : `${process.cwd()}/${filePath}`
+  const timecodeStart =
+    tcString && frameRate
+      ? parseTimecode(tcString, frameRate)
+      : ZERO
 
   return {
-    id: deterministicId(absPath),
-    name: filePath.split("/").pop() ?? filePath,
-    path: absPath,
-    duration,
-    hasVideo: !!videoStream,
-    hasAudio: !!audioStream,
-    videoFormat,
-    audioChannels: audioStream?.channels,
-    audioRate,
-    timecodeStart,
+    type: "external",
+    name: basename(absolutePath),
+    targetUrl: toFileUrl(absolutePath),
+    mediaKind,
+    availableRange: duration
+      ? {
+          startTime: timecodeStart,
+          duration,
+        }
+      : undefined,
+    streamInfo: {
+      hasVideo: !!videoStream,
+      hasAudio: !!audioStream,
+      width: videoStream?.width,
+      height: videoStream?.height,
+      frameRate,
+      audioRate,
+      audioChannels: audioStream?.channels,
+      colorSpace: videoStream ? detectColorSpace(videoStream) : undefined,
+    },
   }
 }

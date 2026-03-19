@@ -157,14 +157,23 @@ export interface NLETimeline {
  * Simplified input for building a timeline from a list of clips.
  * Offsets are computed automatically by sequencing clips in order within each track.
  */
-export interface ClipInput {
+export interface TimelineFileInput {
   path: string
   startAt?: number
   duration?: number
   /** Track index (0-based). Clips with the same track are sequenced together. Default: 0 */
   track?: number
-  /** Track type. Default: inferred from media (video if has video, else audio) */
-  type?: "video" | "audio"
+  /** Track kind. Default: inferred from media (video for video/image, audio for audio-only) */
+  kind?: "video" | "audio"
+}
+
+export interface CreateTimelineOptions {
+  name: string
+  format?: Partial<NLEFormat>
+  tracks?: Track[]
+  metadata?: Metadata
+  markers?: Marker[]
+  globalStartTime?: Rational
 }
 
 export interface ExportOptions {

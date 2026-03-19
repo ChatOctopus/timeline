@@ -4,7 +4,7 @@ Import and export video editing timelines for Final Cut Pro, Adobe Premiere Pro,
 
 Generates well-formed FCPXML 1.8 (Final Cut Pro), FCP7 XML / xmeml v5 (Premiere, Resolve), and OTIO (OpenTimelineIO) with frame-accurate rational time math -- no floating-point drift.
 
-Phase 2 checkpoint: the package now reads and writes OTIO directly against the OTIO-first core model (`Timeline`, `Track`, `TrackItem`, `MediaReference`, `Marker`, `TimeRange`). Metadata, markers, gaps, transitions, global start time, and inline media references round-trip through OTIO. FCPXML, xmeml, and `buildTimeline()` still use the temporary legacy bridge while the migration continues.
+Phase 3 checkpoint: the package now reads and writes OTIO directly against the OTIO-first core model and exposes core-native builder APIs: `probeMediaReference()`, `buildTimelineFromFiles()`, and `createTimeline()`. FCPXML and xmeml still use the temporary legacy bridge while the adapter migration continues.
 
 ## Installation
 
@@ -12,7 +12,7 @@ Phase 2 checkpoint: the package now reads and writes OTIO directly against the O
 npm install @chatoctopus/timeline
 ```
 
-Requires Node.js >= 18. For `buildTimeline()` auto-probing, [FFmpeg/FFprobe](https://ffmpeg.org/) must be installed and on your PATH. Converting between formats does not require FFmpeg/FFprobe.
+Requires Node.js >= 18. For `buildTimelineFromFiles()` or `probeMediaReference()`, [FFmpeg/FFprobe](https://ffmpeg.org/) must be installed and on your PATH. Converting between formats does not require FFmpeg/FFprobe.
 
 ## CLI
 
@@ -81,18 +81,19 @@ writeFileSync("timeline.otio", exportTimeline(tl3, "otio"))
 
 ### Build a timeline from video files
 
-The simplest path: provide file paths and optional trim points. Metadata is extracted automatically via FFprobe.
+The simplest path: provide file paths and optional trim points. Metadata is extracted automatically via FFprobe into inline `ExternalReference` objects.
 
-`buildTimeline()` validates trim inputs strictly: `startAt` and `duration` must be finite, non-negative numbers, `0` is treated as an explicit value, and explicit durations may be rejected for mixed-frame-rate sources when they cannot be represented consistently.
+`buildTimelineFromFiles()` validates trim inputs strictly: `startAt` and `duration` must be finite, non-negative numbers, `0` is treated as an explicit value, still images require an explicit `duration`, and mixed-frame-rate trims may be rejected when they cannot be represented consistently.
 
 ```ts
-import { buildTimeline, exportTimeline } from "@chatoctopus/timeline"
+import { buildTimelineFromFiles, exportTimeline } from "@chatoctopus/timeline"
 import { writeFileSync } from "fs"
 
-const timeline = await buildTimeline("Wedding Highlights", [
+const timeline = await buildTimelineFromFiles("Wedding Highlights", [
   { path: "/footage/ceremony.mp4", startAt: 30, duration: 10 },
   { path: "/footage/reception.mp4", duration: 15 },
   { path: "/footage/speeches.mp4", startAt: 120, duration: 20 },
+  { path: "/slides/title-card.png", duration: 3 },
 ])
 
 // Final Cut Pro
@@ -176,7 +177,8 @@ writeFileSync("output.fcpxml", exportTimeline(timeline, "fcpx"))
 | -------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `exportTimeline(timeline, editor, options?)` | Export a `Timeline` or `NLETimeline`. `editor` is `"fcpx"`, `"premiere"`, `"resolve"`, or `"otio"`. |
 | `importTimeline(content)`                    | Parse FCPXML, xmeml, or OTIO. OTIO currently imports into `Timeline`; FCPXML/xmeml still import into `NLETimeline` during migration. |
-| `buildTimeline(name, clips)`                 | Build an `NLETimeline` from `ClipInput[]` by probing files with FFprobe. |
+| `buildTimelineFromFiles(name, files)`        | Probe files with FFprobe and build a linear `Timeline` with inline media references. |
+| `createTimeline(options)`                    | Create a `Timeline` with default format values for synthetic or programmatic edits. |
 
 ### Format-Specific Functions
 
@@ -218,7 +220,7 @@ All timing uses `Rational` (`{ num: number, den: number }`) to avoid floating-po
 
 | Function               | Description                                                   |
 | ---------------------- | ------------------------------------------------------------- |
-| `probeAsset(filePath)` | Run FFprobe on a file and return a fully populated `NLEAsset` |
+| `probeMediaReference(filePath)` | Run FFprobe on a file and return a populated `ExternalReference` |
 
 ## Types
 
@@ -314,7 +316,28 @@ interface StreamInfo {
 type NLEEditor = "fcpx" | "premiere" | "resolve" | "otio"
 ```
 
-Legacy note: `NLETimeline`, `NLETrack`, `NLEClip`, and `NLEAsset` still exist temporarily while the FCPXML/xmeml adapters and builder APIs are migrated to the new core model. Treat them as transitional, not the long-term API.
+Legacy note: `NLETimeline`, `NLETrack`, `NLEClip`, and `NLEAsset` still exist temporarily while the FCPXML/xmeml adapters are migrated to the new core model. Treat them as transitional, not the long-term API.
+
+Builder inputs:
+
+```ts
+interface TimelineFileInput {
+  path: string
+  startAt?: number
+  duration?: number
+  track?: number
+  kind?: "video" | "audio"
+}
+
+interface CreateTimelineOptions {
+  name: string
+  format?: Partial<NLEFormat>
+  tracks?: Track[]
+  metadata?: Record<string, unknown>
+  markers?: Marker[]
+  globalStartTime?: Rational
+}
+```
 
 ## Supported Formats
 
@@ -401,10 +424,11 @@ console.log('Done.');
 
 ```
 src/
-├── index.ts           Public API: exportTimeline, importTimeline, buildTimeline
+├── index.ts           Public API: exportTimeline, importTimeline, createTimeline, buildTimelineFromFiles
 ├── types.ts           OTIO-first core types plus temporary legacy bridge types
 ├── time.ts            Rational arithmetic, frame alignment, SMPTE timecode parsing
-├── probe.ts           FFprobe metadata extraction
+├── probe.ts           FFprobe -> ExternalReference probing
+├── builders.ts        Core-native timeline construction helpers
 ├── validate.ts        Core + legacy validation and duration computation
 ├── core-legacy.ts     Temporary bridge between the core model and legacy adapters
 ├── fcpxml/
