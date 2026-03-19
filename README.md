@@ -4,8 +4,6 @@ Import and export video editing timelines for Final Cut Pro, Adobe Premiere Pro,
 
 Generates well-formed FCPXML 1.8 (Final Cut Pro), FCP7 XML / xmeml v5 (Premiere, Resolve), and OTIO (OpenTimelineIO) with frame-accurate rational time math -- no floating-point drift.
 
-Phase 5 checkpoint: the package is now fully OTIO-first. OTIO, FCPXML, and xmeml all read and write the same `Timeline` model, legacy `NLE*` bridge types are gone, the CLI surfaces import/export warnings, and still-image clips round-trip as `mediaKind: "image"`.
-
 ## Installation
 
 ```bash
