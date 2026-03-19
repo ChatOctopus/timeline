@@ -1,12 +1,19 @@
 import type {
+  Timeline,
+  Track,
+  TrackItem,
+  Clip,
+  Gap,
+  Transition,
+  Marker,
+  MediaReference,
+  Metadata,
   NLETimeline,
-  NLEClip,
-  NLEAsset,
-  NLETrack,
   Rational,
 } from "../types.js"
-import { toSeconds, isZero } from "../time.js"
-import { validateTimeline, computeTimelineDuration } from "../validate.js"
+import { ZERO } from "../time.js"
+import { validateTimeline } from "../validate.js"
+import { legacyToCoreTimeline, isLegacyTimeline } from "../core-legacy.js"
 import { toFileUrl } from "../file-url.js"
 
 interface OTIORationalTime {
@@ -21,14 +28,42 @@ interface OTIOTimeRange {
   duration: OTIORationalTime
 }
 
-function toRationalTime(
-  r: Rational,
-  frameRate: Rational,
-): OTIORationalTime {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function cloneMetadata(metadata?: Metadata): Metadata {
+  return metadata ? structuredClone(metadata) : {}
+}
+
+function withPackageNamespace(
+  metadata: Metadata | undefined,
+  packageData: Record<string, unknown>,
+): Metadata {
+  const next = cloneMetadata(metadata)
+  const existing = isRecord(next["@chatoctopus/timeline"])
+    ? (next["@chatoctopus/timeline"] as Record<string, unknown>)
+    : {}
+
+  next["@chatoctopus/timeline"] = {
+    ...existing,
+    ...packageData,
+  }
+
+  return next
+}
+
+function normalizeTargetUrl(targetUrl: string): string {
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(targetUrl)) {
+    return targetUrl
+  }
+  return toFileUrl(targetUrl)
+}
+
+function toRationalTime(r: Rational, frameRate: Rational): OTIORationalTime {
   const rateFloat = frameRate.num / frameRate.den
-  const frames = Math.round(
-    (r.num * frameRate.num) / (r.den * frameRate.den),
-  )
+  const frames = Math.round((r.num * frameRate.num) / (r.den * frameRate.den))
+
   return {
     OTIO_SCHEMA: "RationalTime.1",
     rate: rateFloat,
@@ -36,11 +71,7 @@ function toRationalTime(
   }
 }
 
-function toTimeRange(
-  startTime: Rational,
-  duration: Rational,
-  frameRate: Rational,
-): OTIOTimeRange {
+function toTimeRange(startTime: Rational, duration: Rational, frameRate: Rational): OTIOTimeRange {
   return {
     OTIO_SCHEMA: "TimeRange.1",
     start_time: toRationalTime(startTime, frameRate),
@@ -48,117 +79,145 @@ function toTimeRange(
   }
 }
 
-function buildMediaReference(asset: NLEAsset, timelineFrameRate: Rational) {
-  const assetRate = asset.videoFormat?.frameRate ?? timelineFrameRate
+function mediaReferenceFrameRate(
+  mediaReference: MediaReference,
+  fallbackFrameRate: Rational,
+): Rational {
+  if (mediaReference.type === "external" && mediaReference.streamInfo?.frameRate) {
+    return mediaReference.streamInfo.frameRate
+  }
 
+  return fallbackFrameRate
+}
+
+function buildMarker(marker: Marker, frameRate: Rational) {
   return {
-    OTIO_SCHEMA: "ExternalReference.1",
-    available_range: toTimeRange(
-      asset.timecodeStart ?? { num: 0, den: 1 },
-      asset.duration,
-      assetRate,
-    ),
-    target_url: toFileUrl(asset.path),
-    metadata: {},
-    name: asset.name,
+    OTIO_SCHEMA: "Marker.2",
+    name: marker.name ?? "",
+    metadata: cloneMetadata(marker.metadata),
+    marked_range: marker.markedRange
+      ? toTimeRange(marker.markedRange.startTime, marker.markedRange.duration, frameRate)
+      : null,
+    color: marker.color ?? null,
   }
 }
 
-function buildClip(
-  clip: NLEClip,
-  asset: NLEAsset | undefined,
-  timelineFrameRate: Rational,
-) {
-  const assetRate = asset?.videoFormat?.frameRate ?? timelineFrameRate
+function buildMediaReference(mediaReference: MediaReference, frameRate: Rational) {
+  const sourceFrameRate = mediaReferenceFrameRate(mediaReference, frameRate)
 
-  const mediaRef = asset
-    ? buildMediaReference(asset, timelineFrameRate)
-    : { OTIO_SCHEMA: "MissingReference.1", metadata: {}, name: "" }
+  if (mediaReference.type === "missing") {
+    return {
+      OTIO_SCHEMA: "MissingReference.1",
+      metadata: cloneMetadata(mediaReference.metadata),
+      name: mediaReference.name ?? "",
+    }
+  }
+
+  const packageData: Record<string, unknown> = {}
+  if (mediaReference.mediaKind && mediaReference.mediaKind !== "unknown") {
+    packageData.mediaKind = mediaReference.mediaKind
+  }
+  if (mediaReference.streamInfo) {
+    packageData.streamInfo = mediaReference.streamInfo
+  }
+
+  return {
+    OTIO_SCHEMA: "ExternalReference.1",
+    available_range: mediaReference.availableRange
+      ? toTimeRange(
+          mediaReference.availableRange.startTime,
+          mediaReference.availableRange.duration,
+          sourceFrameRate,
+        )
+      : null,
+    target_url: normalizeTargetUrl(mediaReference.targetUrl),
+    metadata: withPackageNamespace(mediaReference.metadata, packageData),
+    name: mediaReference.name ?? "",
+  }
+}
+
+function buildClip(clip: Clip, frameRate: Rational) {
+  const sourceFrameRate = mediaReferenceFrameRate(clip.mediaReference, frameRate)
 
   return {
     OTIO_SCHEMA: "Clip.2",
     name: clip.name,
-    source_range: toTimeRange(clip.sourceIn, clip.sourceDuration, assetRate),
+    source_range: clip.sourceRange
+      ? toTimeRange(clip.sourceRange.startTime, clip.sourceRange.duration, sourceFrameRate)
+      : null,
     media_references: {
-      DEFAULT_MEDIA: mediaRef,
+      DEFAULT_MEDIA: buildMediaReference(clip.mediaReference, frameRate),
     },
     active_media_reference_key: "DEFAULT_MEDIA",
     effects: [],
-    markers: [],
-    metadata: {},
+    markers: (clip.markers ?? []).map((marker) => buildMarker(marker, frameRate)),
+    metadata: cloneMetadata(clip.metadata),
     enabled: clip.enabled !== false,
     color: null,
   }
 }
 
-function buildGap(durationSeconds: number, frameRate: Rational) {
-  const rateFloat = frameRate.num / frameRate.den
+function buildGap(gap: Gap, frameRate: Rational) {
   return {
     OTIO_SCHEMA: "Gap.1",
     name: "",
-    source_range: {
-      OTIO_SCHEMA: "TimeRange.1",
-      start_time: { OTIO_SCHEMA: "RationalTime.1", rate: rateFloat, value: 0 },
-      duration: {
-        OTIO_SCHEMA: "RationalTime.1",
-        rate: rateFloat,
-        value: Math.round(durationSeconds * rateFloat),
-      },
-    },
+    source_range: toTimeRange(gap.sourceRange.startTime, gap.sourceRange.duration, frameRate),
     effects: [],
     markers: [],
-    metadata: {},
-    enabled: true,
+    metadata: cloneMetadata(gap.metadata),
+    enabled: gap.enabled !== false,
     color: null,
   }
 }
 
-function buildTrack(
-  track: NLETrack,
-  assetMap: Map<string, NLEAsset>,
-  timelineFrameRate: Rational,
-) {
-  const sortedClips = [...track.clips].sort(
-    (a, b) => a.offset.num / a.offset.den - b.offset.num / b.offset.den,
-  )
-
-  const children: unknown[] = []
-  let currentTime = 0
-
-  for (const clip of sortedClips) {
-    const clipOffset = toSeconds(clip.offset)
-    const clipDuration = toSeconds(clip.duration)
-
-    if (clipOffset > currentTime + 0.0001) {
-      children.push(buildGap(clipOffset - currentTime, timelineFrameRate))
-    }
-
-    const asset = assetMap.get(clip.assetId)
-    children.push(buildClip(clip, asset, timelineFrameRate))
-    currentTime = clipOffset + clipDuration
+function buildTransition(transition: Transition, frameRate: Rational) {
+  return {
+    OTIO_SCHEMA: "Transition.1",
+    name: transition.name ?? "",
+    transition_type: transition.transitionType ?? "SMPTE_Dissolve",
+    in_offset: toRationalTime(transition.inOffset, frameRate),
+    out_offset: toRationalTime(transition.outOffset, frameRate),
+    metadata: cloneMetadata(transition.metadata),
   }
+}
 
-  const kind = track.type === "video" ? "Video" : "Audio"
+function buildTrackItem(item: TrackItem, frameRate: Rational) {
+  switch (item.kind) {
+    case "clip":
+      return buildClip(item, frameRate)
+    case "gap":
+      return buildGap(item, frameRate)
+    case "transition":
+      return buildTransition(item, frameRate)
+  }
+}
+
+function buildTrack(track: Track, frameRate: Rational) {
+  const kind = track.kind === "video" ? "Video" : "Audio"
 
   return {
     OTIO_SCHEMA: "Track.1",
-    name: `${kind} Track`,
+    name: track.name ?? `${kind} Track`,
     kind,
-    children,
+    children: track.items.map((item) => buildTrackItem(item, frameRate)),
     source_range: null,
     effects: [],
-    markers: [],
-    metadata: {},
-    enabled: true,
+    markers: (track.markers ?? []).map((marker) => buildMarker(marker, frameRate)),
+    metadata: cloneMetadata(track.metadata),
+    enabled: track.enabled !== false,
     color: null,
   }
 }
 
+function normalizeTimeline(timeline: Timeline | NLETimeline): Timeline {
+  return isLegacyTimeline(timeline) ? legacyToCoreTimeline(timeline) : timeline
+}
+
 /**
- * Generate an OpenTimelineIO (.otio) JSON string from an NLETimeline.
+ * Generate an OpenTimelineIO (.otio) JSON string from a timeline.
  */
-export function writeOTIO(timeline: NLETimeline): string {
-  const errors = validateTimeline(timeline)
+export function writeOTIO(timelineInput: Timeline | NLETimeline): string {
+  const errors = validateTimeline(timelineInput)
   const hardErrors = errors.filter((e) => e.type === "error")
   if (hardErrors.length > 0) {
     throw new Error(
@@ -166,46 +225,32 @@ export function writeOTIO(timeline: NLETimeline): string {
     )
   }
 
-  const timelineFrameRate = timeline.format.frameRate
-  const rateFloat =
-    timelineFrameRate.num / timelineFrameRate.den
-  const assetMap = new Map(timeline.assets.map((a) => [a.id, a]))
-
-  const tracks = timeline.tracks.map((t) =>
-    buildTrack(t, assetMap, timelineFrameRate),
-  )
-
-  const globalStartTime: OTIORationalTime = {
-    OTIO_SCHEMA: "RationalTime.1",
-    rate: rateFloat,
-    value: 0,
-  }
+  const timeline = normalizeTimeline(timelineInput)
+  const frameRate = timeline.format.frameRate
 
   const otioTimeline = {
     OTIO_SCHEMA: "Timeline.1",
     name: timeline.name,
-    global_start_time: globalStartTime,
+    global_start_time: toRationalTime(timeline.globalStartTime ?? ZERO, frameRate),
     tracks: {
       OTIO_SCHEMA: "Stack.1",
       name: "tracks",
-      children: tracks,
+      children: timeline.tracks.map((track) => buildTrack(track, frameRate)),
       source_range: null,
       effects: [],
-      markers: [],
+      markers: (timeline.markers ?? []).map((marker) => buildMarker(marker, frameRate)),
       metadata: {},
       enabled: true,
       color: null,
     },
-    metadata: {
-      "@chatoctopus/timeline": {
-        format: {
-          width: timeline.format.width,
-          height: timeline.format.height,
-          audioRate: timeline.format.audioRate,
-          colorSpace: timeline.format.colorSpace ?? null,
-        },
+    metadata: withPackageNamespace(timeline.metadata, {
+      format: {
+        width: timeline.format.width,
+        height: timeline.format.height,
+        audioRate: timeline.format.audioRate,
+        colorSpace: timeline.format.colorSpace ?? null,
       },
-    },
+    }),
   }
 
   return JSON.stringify(otioTimeline, null, 2) + "\n"

@@ -174,7 +174,7 @@ export interface ExportOptions {
 }
 
 export interface ImportResult {
-  timeline: NLETimeline
+  timeline: Timeline | NLETimeline
   /** Warnings encountered during parsing (non-fatal issues) */
   warnings: string[]
 }

@@ -65,6 +65,7 @@ export { writeOTIO } from "./otio/writer.js"
 export { readOTIO } from "./otio/reader.js"
 
 import type {
+  Timeline,
   NLETimeline,
   NLEEditor,
   NLEExportFormat,
@@ -79,6 +80,7 @@ import { readXMEML } from "./xmeml/reader.js"
 import { writeOTIO } from "./otio/writer.js"
 import { readOTIO } from "./otio/reader.js"
 import { probeAsset } from "./probe.js"
+import { coreToLegacyTimeline, isLegacyTimeline } from "./core-legacy.js"
 import {
   ZERO,
   add,
@@ -179,18 +181,19 @@ function chooseSharedDuration(
  * ```
  */
 export function exportTimeline(
-  timeline: NLETimeline,
+  timeline: Timeline | NLETimeline,
   editor: NLEEditor,
   options?: Omit<ExportOptions, "format">,
 ): string {
   const format = EDITOR_FORMAT_MAP[editor]
   const fullOptions: ExportOptions = { ...options, format }
+  const legacyTimeline = isLegacyTimeline(timeline) ? timeline : coreToLegacyTimeline(timeline)
 
   switch (format) {
     case "fcpxml":
-      return writeFCPXML(timeline, fullOptions)
+      return writeFCPXML(legacyTimeline, fullOptions)
     case "xmeml":
-      return writeXMEML(timeline, fullOptions)
+      return writeXMEML(legacyTimeline, fullOptions)
     case "otio":
       return writeOTIO(timeline)
     default:
