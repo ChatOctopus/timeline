@@ -1,9 +1,9 @@
 import type {
+  Timeline,
   NLETimeline,
-  NLEAsset,
-  NLEClip,
-  NLETrack,
   ExportOptions,
+  ExternalReference,
+  Rational,
 } from "../types.js"
 import {
   toFCPString,
@@ -13,19 +13,33 @@ import {
   frameDuration,
   isZero,
   toSeconds,
+  isDropFrame,
 } from "../time.js"
 import {
   validateTimeline,
-  hasErrors,
   computeTimelineDuration,
 } from "../validate.js"
-import { toFileUrl } from "../file-url.js"
+import {
+  clipDuration,
+  collectAdapterResources,
+  makeWarningEmitter,
+  normalizeTargetUrl,
+  normalizeTimeline,
+  trackClipPlacements,
+  warnOnUnsupportedExportFeatures,
+} from "../adapter-core.js"
 
 interface XMLNode {
   tag: string
   attrs?: Record<string, string>
   children?: (XMLNode | string)[]
   selfClose?: boolean
+}
+
+interface ConnectedPlacement {
+  clip: Timeline["tracks"][number]["items"][number] & { kind: "clip" }
+  offset: Rational
+  lane: number
 }
 
 function escapeXml(s: string): string {
@@ -41,7 +55,7 @@ function renderNode(node: XMLNode, indent: number): string {
   const pad = "  ".repeat(indent)
   const attrStr = node.attrs
     ? Object.entries(node.attrs)
-        .map(([k, v]) => ` ${k}="${escapeXml(v)}"`)
+        .map(([key, value]) => ` ${key}="${escapeXml(value)}"`)
         .join("")
     : ""
 
@@ -56,74 +70,106 @@ function renderNode(node: XMLNode, indent: number): string {
   }
 
   const childrenStr = node.children
-    .map((c) =>
-      typeof c === "string"
-        ? `${pad}  ${escapeXml(c)}`
-        : renderNode(c, indent + 1),
+    .map((child) =>
+      typeof child === "string"
+        ? `${pad}  ${escapeXml(child)}`
+        : renderNode(child, indent + 1),
     )
     .join("\n")
 
   return `${pad}<${node.tag}${attrStr}>\n${childrenStr}\n${pad}</${node.tag}>`
 }
 
-function buildFormatNode(timeline: NLETimeline, formatId: string): XMLNode {
-  const fmt = timeline.format
-  const fd = frameDuration(fmt.frameRate)
+function mediaCapabilities(reference: ExternalReference) {
+  const streamInfo = reference.streamInfo
+  const mediaKind = reference.mediaKind ?? "unknown"
+  const hasVideo = streamInfo?.hasVideo ?? (mediaKind === "video" || mediaKind === "image")
+  const hasAudio = streamInfo?.hasAudio ?? mediaKind === "audio"
+
+  return {
+    hasVideo,
+    hasAudio,
+    width: streamInfo?.width,
+    height: streamInfo?.height,
+    frameRate: streamInfo?.frameRate,
+    audioRate: streamInfo?.audioRate,
+    audioChannels: streamInfo?.audioChannels,
+    colorSpace: streamInfo?.colorSpace,
+  }
+}
+
+function buildFormatNode(timeline: Timeline, formatId: string): XMLNode {
+  const fd = frameDuration(timeline.format.frameRate)
   return {
     tag: "format",
     attrs: {
       id: formatId,
-      width: String(fmt.width),
-      height: String(fmt.height),
+      width: String(timeline.format.width),
+      height: String(timeline.format.height),
       frameDuration: toFCPString(fd),
-      ...(fmt.colorSpace ? { colorSpace: fmt.colorSpace } : {}),
+      ...(timeline.format.colorSpace ? { colorSpace: timeline.format.colorSpace } : {}),
     },
   }
 }
 
-function buildAssetNode(asset: NLEAsset, formatId: string): XMLNode {
+function buildAssetNode(
+  resource: ReturnType<typeof collectAdapterResources>[number],
+  formatId: string,
+): XMLNode {
+  const caps = mediaCapabilities(resource.reference)
+  const availableRange = resource.reference.availableRange ?? {
+    startTime: ZERO,
+    duration: resource.inferredDuration,
+  }
+
   const attrs: Record<string, string> = {
-    id: asset.id,
-    name: asset.name,
-    uid: asset.id,
-    src: toFileUrl(asset.path),
-    start: toFCPString(asset.timecodeStart ?? ZERO),
-    duration: toFCPString(asset.duration),
+    id: resource.id,
+    name: resource.reference.name ?? resource.reference.targetUrl.split("/").pop() ?? resource.id,
+    uid: resource.id,
+    src: normalizeTargetUrl(resource.reference.targetUrl),
+    start: toFCPString(availableRange.startTime),
+    duration: toFCPString(availableRange.duration),
     format: formatId,
   }
 
-  if (asset.hasVideo) {
-    attrs.hasVideo = "1"
-  }
-  if (asset.hasAudio) {
+  if (caps.hasVideo) attrs.hasVideo = "1"
+  if (caps.hasAudio) {
     attrs.hasAudio = "1"
-    if (asset.audioRate) attrs.audioRate = String(asset.audioRate)
-    if (asset.audioChannels) attrs.audioChannels = String(asset.audioChannels)
+    if (caps.audioRate) attrs.audioRate = String(caps.audioRate)
+    if (caps.audioChannels) attrs.audioChannels = String(caps.audioChannels)
   }
 
   return { tag: "asset", attrs }
 }
 
+function clipStart(clip: ConnectedPlacement["clip"]): string {
+  if (clip.mediaReference.type !== "external") return "0s"
+
+  const availableStart = clip.mediaReference.availableRange?.startTime ?? ZERO
+  const sourceStart = clip.sourceRange?.startTime ?? ZERO
+  return toFCPString(isZero(availableStart) ? sourceStart : add(availableStart, sourceStart))
+}
+
 function buildAssetClipNode(
-  clip: NLEClip,
-  asset: NLEAsset,
+  clip: ConnectedPlacement["clip"],
+  resourceId: string,
+  offset: { num: number; den: number },
+  lane: number | undefined,
   volumeDb?: number,
 ): XMLNode {
-  const tcStart = asset.timecodeStart ?? ZERO
-  const clipStart = isZero(tcStart)
-    ? clip.sourceIn
-    : add(tcStart, clip.sourceIn)
-
   const attrs: Record<string, string> = {
     name: clip.name,
-    ref: clip.assetId,
-    offset: toFCPString(clip.offset),
-    duration: toFCPString(clip.duration),
-    start: toFCPString(clipStart),
+    ref: resourceId,
+    offset: toFCPString(offset),
+    duration: toFCPString(clipDuration(clip)),
+    start: clipStart(clip),
   }
 
-  if (clip.audioRole) attrs.audioRole = clip.audioRole
-  if (clip.lane !== undefined && clip.lane !== 0) attrs.lane = String(clip.lane)
+  const audioRole = typeof clip.metadata?.audioRole === "string"
+    ? clip.metadata.audioRole
+    : undefined
+  if (audioRole) attrs.audioRole = audioRole
+  if (lane !== undefined && lane !== 0) attrs.lane = String(lane)
   if (clip.enabled === false) attrs.enabled = "0"
 
   const children: XMLNode[] = []
@@ -141,154 +187,168 @@ function buildAssetClipNode(
   }
 }
 
-/**
- * Generate FCPXML 1.8 from an NLETimeline.
- */
-export function writeFCPXML(
-  timeline: NLETimeline,
-  options?: ExportOptions,
-): string {
-  const errors = validateTimeline(timeline)
-  const hardErrors = errors.filter((e) => e.type === "error")
-  if (hardErrors.length > 0) {
-    throw new Error(
-      `Timeline validation failed:\n${hardErrors.map((e) => `  - ${e.message}`).join("\n")}`,
+function attachConnectedClips(
+  node: XMLNode,
+  connected: ConnectedPlacement[],
+  resourceMap: Map<string, string>,
+  volumeDb: number | undefined,
+): void {
+  if (connected.length === 0) return
+
+  node.children = node.children ?? []
+  for (const placement of connected) {
+    if (placement.clip.mediaReference.type !== "external") {
+      continue
+    }
+
+    const resourceId = resourceMap.get(normalizeTargetUrl(placement.clip.mediaReference.targetUrl))
+    if (!resourceId) continue
+
+    node.children.push(
+      buildAssetClipNode(placement.clip, resourceId, placement.offset, placement.lane, volumeDb),
     )
   }
+}
+
+/**
+ * Generate FCPXML 1.8 from a Timeline.
+ */
+export function writeFCPXML(
+  timelineInput: Timeline | NLETimeline,
+  options?: ExportOptions,
+): string {
+  const errors = validateTimeline(timelineInput)
+  const hardErrors = errors.filter((error) => error.type === "error")
+  if (hardErrors.length > 0) {
+    throw new Error(
+      `Timeline validation failed:\n${hardErrors.map((error) => `  - ${error.message}`).join("\n")}`,
+    )
+  }
+
+  const timeline = normalizeTimeline(timelineInput)
+  const emitWarning = makeWarningEmitter(options)
+  warnOnUnsupportedExportFeatures(timeline, emitWarning)
 
   const formatId = "r1"
   const volumeDb = options?.volumeDb
-  const assetMap = new Map(timeline.assets.map((a) => [a.id, a]))
-
+  const resources = collectAdapterResources(timeline)
+  const resourceMap = new Map(resources.map((resource) => [resource.reference.targetUrl, resource.id]))
   const sequenceDuration = computeTimelineDuration(timeline)
 
-  const videoTracks = timeline.tracks.filter((t) => t.type === "video")
-  const primaryClips = videoTracks[0]?.clips ?? []
-  const connectedClips = videoTracks
-    .slice(1)
-    .flatMap((t, ti) =>
-      t.clips.map((c) => ({ ...c, lane: c.lane ?? ti + 1 })),
-    )
+  const primaryTrackIndex = timeline.tracks.findIndex((track) => track.kind === "video")
+  const fallbackPrimaryIndex = primaryTrackIndex >= 0 ? primaryTrackIndex : (timeline.tracks[0] ? 0 : -1)
+  const primaryTrack = fallbackPrimaryIndex >= 0 ? timeline.tracks[fallbackPrimaryIndex] : undefined
 
-  const sortedPrimary = [...primaryClips].sort(
-    (a, b) => a.offset.num / a.offset.den - b.offset.num / b.offset.den,
-  )
+  const connectedPlacements: ConnectedPlacement[] = timeline.tracks
+    .flatMap((track, index) => {
+      if (index === fallbackPrimaryIndex) return []
 
+      const lane = index < fallbackPrimaryIndex || fallbackPrimaryIndex < 0
+        ? index + 1
+        : index
+
+      return trackClipPlacements(track, emitWarning)
+        .filter((placement) => placement.clip.mediaReference.type === "external")
+        .map((placement) => ({
+          clip: placement.clip,
+          offset: placement.offset,
+          lane,
+        }))
+    })
+    .sort((a, b) => toSeconds(a.offset) - toSeconds(b.offset))
+
+  const remainingConnected = [...connectedPlacements]
   const spineChildren: XMLNode[] = []
   let currentTime = ZERO
-  let remainingConnected = [...connectedClips]
 
-  for (const clip of sortedPrimary) {
-    const clipOffsetSec = toSeconds(clip.offset)
-    const currentSec = toSeconds(currentTime)
-
-    if (clipOffsetSec > currentSec + 0.0001) {
-      const gapDuration = subtract(clip.offset, currentTime)
-      const gapNode: XMLNode = {
-        tag: "gap",
-        attrs: {
-          name: "Gap",
-          offset: toFCPString(currentTime),
-          duration: toFCPString(gapDuration),
-          start: "0s",
-        },
+  if (primaryTrack) {
+    for (const item of primaryTrack.items) {
+      if (item.kind === "transition") {
+        emitWarning("Transitions are not supported in this export format and were dropped")
+        continue
       }
 
-      const gapEnd = clipOffsetSec
-      const attached = remainingConnected.filter((cc) => {
-        const ccStart = toSeconds(cc.offset)
-        return ccStart >= currentSec && ccStart < gapEnd
+      if (item.kind === "gap") {
+        const gapDuration = item.sourceRange.duration
+        const gapEnd = add(currentTime, gapDuration)
+        const node: XMLNode = {
+          tag: "gap",
+          attrs: {
+            name: "Gap",
+            offset: toFCPString(currentTime),
+            duration: toFCPString(gapDuration),
+            start: "0s",
+          },
+        }
+
+        const attached = remainingConnected.filter((placement) => {
+          const placementStart = toSeconds(placement.offset)
+          return placementStart >= toSeconds(currentTime) && placementStart < toSeconds(gapEnd)
+        })
+
+        attachConnectedClips(node, attached, resourceMap, volumeDb)
+        spineChildren.push(node)
+        currentTime = gapEnd
+        for (const placement of attached) {
+          remainingConnected.splice(remainingConnected.indexOf(placement), 1)
+        }
+        continue
+      }
+
+      const duration = clipDuration(item)
+      const clipEnd = add(currentTime, duration)
+
+      if (item.mediaReference.type !== "external") {
+        emitWarning("Missing media references are not supported in this export format and were dropped")
+        currentTime = clipEnd
+        continue
+      }
+
+      const resourceId = resourceMap.get(normalizeTargetUrl(item.mediaReference.targetUrl))
+      if (!resourceId) {
+        currentTime = clipEnd
+        continue
+      }
+
+      const node = buildAssetClipNode(item, resourceId, currentTime, undefined, volumeDb)
+      const attached = remainingConnected.filter((placement) => {
+        const placementStart = toSeconds(placement.offset)
+        return placementStart >= toSeconds(currentTime) && placementStart < toSeconds(clipEnd)
       })
 
-      if (attached.length > 0) {
-        gapNode.children = []
-        for (const cc of attached) {
-          const ccAsset = assetMap.get(cc.assetId)
-          if (!ccAsset) throw new Error(`Asset not found: ${cc.assetId}`)
-          const ccNode = buildAssetClipNode(cc, ccAsset, volumeDb)
-          if (!ccNode.attrs!.lane) {
-            ccNode.attrs!.lane = String(cc.lane ?? 1)
-          }
-          gapNode.children.push(ccNode)
-        }
-        remainingConnected = remainingConnected.filter(
-          (c) => !attached.includes(c),
-        )
+      attachConnectedClips(node, attached, resourceMap, volumeDb)
+      spineChildren.push(node)
+      currentTime = clipEnd
+      for (const placement of attached) {
+        remainingConnected.splice(remainingConnected.indexOf(placement), 1)
       }
-
-      spineChildren.push(gapNode)
-      currentTime = clip.offset
     }
-
-    const asset = assetMap.get(clip.assetId)
-    if (!asset) throw new Error(`Asset not found: ${clip.assetId}`)
-    const node = buildAssetClipNode(clip, asset, volumeDb)
-
-    const clipStart = toSeconds(clip.offset)
-    const clipEnd = clipStart + toSeconds(clip.duration)
-
-    const attached = remainingConnected.filter((cc) => {
-      const ccStart = toSeconds(cc.offset)
-      return ccStart >= clipStart && ccStart < clipEnd
-    })
-
-    if (attached.length > 0) {
-      node.children = node.children ?? []
-      for (const cc of attached) {
-        const ccAsset = assetMap.get(cc.assetId)
-        if (!ccAsset) throw new Error(`Asset not found: ${cc.assetId}`)
-        const ccNode = buildAssetClipNode(cc, ccAsset, volumeDb)
-        if (!ccNode.attrs!.lane) {
-          ccNode.attrs!.lane = String(cc.lane ?? 1)
-        }
-        node.children.push(ccNode)
-      }
-      remainingConnected = remainingConnected.filter(
-        (c) => !attached.includes(c),
-      )
-    }
-
-    spineChildren.push(node)
-    currentTime = add(clip.offset, clip.duration)
   }
 
   if (remainingConnected.length > 0) {
-    const maxEnd = remainingConnected.reduce((max, cc) => {
-      const end = add(cc.offset, cc.duration)
+    const maxEnd = remainingConnected.reduce((max, placement) => {
+      const end = add(placement.offset, clipDuration(placement.clip))
       return toSeconds(end) > toSeconds(max) ? end : max
     }, currentTime)
 
-    const gapDuration = subtract(maxEnd, currentTime)
-    const gapNode: XMLNode = {
+    const node: XMLNode = {
       tag: "gap",
       attrs: {
         name: "Gap",
         offset: toFCPString(currentTime),
-        duration: toFCPString(gapDuration),
+        duration: toFCPString(subtract(maxEnd, currentTime)),
         start: "0s",
       },
     }
 
-    gapNode.children = []
-    for (const cc of remainingConnected) {
-      const ccAsset = assetMap.get(cc.assetId)
-      if (!ccAsset) throw new Error(`Asset not found: ${cc.assetId}`)
-      const ccNode = buildAssetClipNode(cc, ccAsset, volumeDb)
-      if (!ccNode.attrs!.lane) {
-        ccNode.attrs!.lane = String(cc.lane ?? 1)
-      }
-      gapNode.children.push(ccNode)
-    }
-
-    spineChildren.push(gapNode)
+    attachConnectedClips(node, remainingConnected, resourceMap, volumeDb)
+    spineChildren.push(node)
   }
 
-  const fd = frameDuration(timeline.format.frameRate)
   const audioRateStr =
     timeline.format.audioRate >= 1000
       ? `${Math.round(timeline.format.audioRate / 1000)}k`
       : String(timeline.format.audioRate)
-
   const now = new Date()
   const modDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")} ${Intl.DateTimeFormat().resolvedOptions().timeZone}`
 
@@ -300,7 +360,7 @@ export function writeFCPXML(
         tag: "resources",
         children: [
           buildFormatNode(timeline, formatId),
-          ...timeline.assets.map((a) => buildAssetNode(a, formatId)),
+          ...resources.map((resource) => buildAssetNode(resource, formatId)),
         ],
       },
       {
@@ -319,8 +379,8 @@ export function writeFCPXML(
                     attrs: {
                       duration: toFCPString(sequenceDuration),
                       format: formatId,
-                      tcStart: "0s",
-                      tcFormat: "NDF",
+                      tcStart: toFCPString(timeline.globalStartTime ?? ZERO),
+                      tcFormat: isDropFrame(timeline.format.frameRate) ? "DF" : "NDF",
                       audioLayout: "stereo",
                       audioRate: audioRateStr,
                     },

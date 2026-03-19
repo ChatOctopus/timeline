@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest"
 import { writeXMEML } from "../src/xmeml/writer.js"
 import { readXMEML } from "../src/xmeml/reader.js"
-import type { NLETimeline } from "../src/types.js"
+import type { Timeline, TrackItem } from "../src/types.js"
 import { rational, ZERO, toSeconds } from "../src/time.js"
 
-function makeTimeline(overrides?: Partial<NLETimeline>): NLETimeline {
+function makeTimeline(overrides?: Partial<Timeline>): Timeline {
   return {
     name: "Test Sequence",
     format: {
@@ -13,61 +13,71 @@ function makeTimeline(overrides?: Partial<NLETimeline>): NLETimeline {
       frameRate: rational(30000, 1001),
       audioRate: 48000,
     },
-    assets: [
-      {
-        id: "r2",
-        name: "interview.mp4",
-        path: "/footage/interview.mp4",
-        duration: rational(900 * 1001, 30000),
-        hasVideo: true,
-        hasAudio: true,
-        videoFormat: {
-          width: 1920,
-          height: 1080,
-          frameRate: rational(30000, 1001),
-          audioRate: 48000,
-        },
-        audioChannels: 2,
-        audioRate: 48000,
-        timecodeStart: ZERO,
-      },
-      {
-        id: "r3",
-        name: "broll.mp4",
-        path: "/footage/broll.mp4",
-        duration: rational(450 * 1001, 30000),
-        hasVideo: true,
-        hasAudio: true,
-        videoFormat: {
-          width: 1920,
-          height: 1080,
-          frameRate: rational(24000, 1001),
-          audioRate: 48000,
-        },
-        audioChannels: 2,
-        audioRate: 48000,
-        timecodeStart: ZERO,
-      },
-    ],
     tracks: [
       {
-        type: "video",
-        clips: [
+        kind: "video",
+        name: "V1",
+        items: [
           {
-            assetId: "r2",
+            kind: "clip",
             name: "interview",
-            offset: ZERO,
-            duration: rational(300 * 1001, 30000),
-            sourceIn: ZERO,
-            sourceDuration: rational(300 * 1001, 30000),
+            mediaReference: {
+              type: "external",
+              name: "interview.mp4",
+              targetUrl: "file:///footage/interview.mp4",
+              mediaKind: "video",
+              availableRange: {
+                startTime: ZERO,
+                duration: rational(900 * 1001, 30000),
+              },
+              streamInfo: {
+                hasVideo: true,
+                hasAudio: true,
+                width: 1920,
+                height: 1080,
+                frameRate: rational(30000, 1001),
+                audioRate: 48000,
+                audioChannels: 2,
+              },
+            },
+            sourceRange: {
+              startTime: ZERO,
+              duration: rational(300 * 1001, 30000),
+            },
           },
           {
-            assetId: "r3",
+            kind: "gap",
+            sourceRange: {
+              startTime: ZERO,
+              duration: rational(15 * 1001, 30000),
+            },
+          },
+          {
+            kind: "clip",
             name: "broll",
-            offset: rational(300 * 1001, 30000),
-            duration: rational(150 * 1001, 30000),
-            sourceIn: rational(30 * 1001, 24000),
-            sourceDuration: rational(150 * 1001, 30000),
+            mediaReference: {
+              type: "external",
+              name: "broll.mp4",
+              targetUrl: "file:///footage/broll.mp4",
+              mediaKind: "video",
+              availableRange: {
+                startTime: ZERO,
+                duration: rational(450 * 1001, 30000),
+              },
+              streamInfo: {
+                hasVideo: true,
+                hasAudio: true,
+                width: 1920,
+                height: 1080,
+                frameRate: rational(24000, 1001),
+                audioRate: 48000,
+                audioChannels: 2,
+              },
+            },
+            sourceRange: {
+              startTime: rational(30 * 1001, 24000),
+              duration: rational(150 * 1001, 30000),
+            },
           },
         ],
       },
@@ -76,8 +86,17 @@ function makeTimeline(overrides?: Partial<NLETimeline>): NLETimeline {
   }
 }
 
+function expectClip(item: TrackItem) {
+  expect(item.kind).toBe("clip")
+  if (item.kind !== "clip") {
+    throw new Error("expected clip")
+  }
+
+  return item
+}
+
 describe("writeXMEML", () => {
-  it("generates valid xmeml v5 structure", () => {
+  it("generates valid xmeml v5 structure from the core model", () => {
     const xml = writeXMEML(makeTimeline())
 
     expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>')
@@ -124,10 +143,37 @@ describe("writeXMEML", () => {
     expect(xml).toContain("<pathurl>file:///footage/broll.mp4</pathurl>")
   })
 
-  it("includes samplecharacteristics for audio", () => {
-    const xml = writeXMEML(makeTimeline())
-    expect(xml).toContain("<samplerate>48000</samplerate>")
-    expect(xml).toContain("<sampledepth>16</sampledepth>")
+  it("surfaces warnings when dropping unsupported core-only fields", () => {
+    const warnings: string[] = []
+    const xml = writeXMEML(
+      makeTimeline({
+        metadata: { project: "demo" },
+        markers: [{ name: "intro" }],
+        tracks: [
+          {
+            kind: "video",
+            items: [
+              {
+                kind: "transition",
+                name: "cross-dissolve",
+                inOffset: rational(10, 30),
+                outOffset: rational(10, 30),
+              },
+              ...makeTimeline().tracks[0].items,
+            ],
+          },
+        ],
+      }),
+      {
+        format: "xmeml",
+        onWarning: (warning) => warnings.push(warning),
+      },
+    )
+
+    expect(xml).toContain("<xmeml")
+    expect(warnings.some((warning) => warning.toLowerCase().includes("transition"))).toBe(true)
+    expect(warnings.some((warning) => warning.toLowerCase().includes("metadata"))).toBe(true)
+    expect(warnings.some((warning) => warning.toLowerCase().includes("marker"))).toBe(true)
   })
 
   it("throws on invalid timeline", () => {
@@ -138,26 +184,21 @@ describe("writeXMEML", () => {
 })
 
 describe("readXMEML", () => {
-  it("roundtrips through write/read", () => {
-    const original = makeTimeline()
-    const xml = writeXMEML(original)
+  it("roundtrips through write/read into the core model", () => {
+    const xml = writeXMEML(makeTimeline())
     const { timeline } = readXMEML(xml)
 
     expect(timeline.name).toBe("Test Sequence")
     expect(timeline.format.width).toBe(1920)
     expect(timeline.format.height).toBe(1080)
-    expect(timeline.assets.length).toBeGreaterThanOrEqual(2)
-    expect(timeline.tracks.length).toBeGreaterThanOrEqual(1)
-  })
 
-  it("preserves clip count through roundtrip", () => {
-    const original = makeTimeline()
-    const xml = writeXMEML(original)
-    const { timeline } = readXMEML(xml)
-
-    const videoTrack = timeline.tracks.find((t) => t.type === "video")
+    const videoTrack = timeline.tracks.find((track) => track.kind === "video")
     expect(videoTrack).toBeDefined()
-    expect(videoTrack!.clips.length).toBe(2)
+    expect(videoTrack!.items.map((item) => item.kind)).toEqual([
+      "clip",
+      "gap",
+      "clip",
+    ])
   })
 
   it("preserves clip timing through roundtrip", () => {
@@ -165,18 +206,38 @@ describe("readXMEML", () => {
     const xml = writeXMEML(original)
     const { timeline } = readXMEML(xml)
 
-    const videoTrack = timeline.tracks.find((t) => t.type === "video")
-    const origClips = original.tracks[0].clips
-    const parsedClips = videoTrack!.clips
+    const videoTrack = timeline.tracks.find((track) => track.kind === "video")
+    expect(videoTrack).toBeDefined()
 
-    expect(toSeconds(parsedClips[0].offset)).toBeCloseTo(
-      toSeconds(origClips[0].offset),
+    const parsedFirst = expectClip(videoTrack!.items[0])
+    const parsedSecond = expectClip(videoTrack!.items[2])
+
+    expect(toSeconds(parsedFirst.sourceRange?.duration ?? ZERO)).toBeCloseTo(
+      toSeconds((original.tracks[0].items[0] as any).sourceRange.duration),
       2,
     )
-    expect(toSeconds(parsedClips[1].offset)).toBeCloseTo(
-      toSeconds(origClips[1].offset),
+    expect(toSeconds(parsedSecond.sourceRange?.startTime ?? ZERO)).toBeCloseTo(
+      toSeconds((original.tracks[0].items[2] as any).sourceRange.startTime),
       2,
     )
+  })
+
+  it("extracts inline media references", () => {
+    const xml = writeXMEML(makeTimeline())
+    const { timeline } = readXMEML(xml)
+
+    const videoTrack = timeline.tracks.find((track) => track.kind === "video")
+    const clip = expectClip(videoTrack!.items[0])
+    expect(clip.mediaReference.type).toBe("external")
+    if (clip.mediaReference.type !== "external") {
+      throw new Error("expected external reference")
+    }
+
+    expect(clip.mediaReference.targetUrl).toBe("file:///footage/interview.mp4")
+    expect(clip.mediaReference.streamInfo).toMatchObject({
+      hasVideo: true,
+      hasAudio: true,
+    })
   })
 
   it("throws on invalid XML", () => {
@@ -202,59 +263,51 @@ describe("readXMEML", () => {
     expect(timeline.format.height).toBe(1080)
   })
 
-  it("roundtrips timecodeStart in sourceIn", () => {
+  it("roundtrips timecodeStart in sourceRange.startTime", () => {
     const tcStart = rational(108000 * 1001, 30000)
-    const timeline: NLETimeline = {
-      name: "TC Test",
-      format: {
-        width: 1920,
-        height: 1080,
-        frameRate: rational(30000, 1001),
-        audioRate: 48000,
-      },
-      assets: [
-        {
-          id: "r2",
-          name: "tc-clip.mp4",
-          path: "/footage/tc-clip.mp4",
-          duration: rational(900 * 1001, 30000),
-          hasVideo: true,
-          hasAudio: true,
-          videoFormat: {
-            width: 1920,
-            height: 1080,
-            frameRate: rational(30000, 1001),
-            audioRate: 48000,
-          },
-          audioChannels: 2,
-          audioRate: 48000,
-          timecodeStart: tcStart,
-        },
-      ],
+    const timeline = makeTimeline({
       tracks: [
         {
-          type: "video",
-          clips: [
+          kind: "video",
+          items: [
             {
-              assetId: "r2",
+              kind: "clip",
               name: "tc-clip",
-              offset: ZERO,
-              duration: rational(150 * 1001, 30000),
-              sourceIn: rational(60 * 1001, 30000),
-              sourceDuration: rational(150 * 1001, 30000),
+              mediaReference: {
+                type: "external",
+                name: "tc-clip.mp4",
+                targetUrl: "file:///footage/tc-clip.mp4",
+                mediaKind: "video",
+                availableRange: {
+                  startTime: tcStart,
+                  duration: rational(900 * 1001, 30000),
+                },
+                streamInfo: {
+                  hasVideo: true,
+                  hasAudio: true,
+                  width: 1920,
+                  height: 1080,
+                  frameRate: rational(30000, 1001),
+                  audioRate: 48000,
+                  audioChannels: 2,
+                },
+              },
+              sourceRange: {
+                startTime: rational(60 * 1001, 30000),
+                duration: rational(150 * 1001, 30000),
+              },
             },
           ],
         },
       ],
-    }
+    })
 
     const xml = writeXMEML(timeline)
     const { timeline: imported } = readXMEML(xml)
 
-    const videoTrack = imported.tracks.find((t) => t.type === "video")
-    expect(videoTrack).toBeDefined()
-    const clip = videoTrack!.clips[0]
-    expect(toSeconds(clip.sourceIn)).toBeCloseTo(
+    const videoTrack = imported.tracks.find((track) => track.kind === "video")
+    const clip = expectClip(videoTrack!.items[0])
+    expect(toSeconds(clip.sourceRange?.startTime ?? ZERO)).toBeCloseTo(
       toSeconds(rational(60 * 1001, 30000)),
       2,
     )

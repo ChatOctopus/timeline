@@ -9,6 +9,12 @@ import { validateTimeline } from "../src/validate.js"
 import type { NLETimeline } from "../src/types.js"
 import { rational, ZERO, toSeconds } from "../src/time.js"
 
+function extractClips(timeline: { tracks: Array<{ items: Array<{ kind: string; name?: string }> }> }) {
+  return timeline.tracks.flatMap((track) =>
+    track.items.filter((item): item is { kind: "clip"; name: string } => item.kind === "clip"),
+  )
+}
+
 function makeMultiTrackTimeline(): NLETimeline {
   return {
     name: "Multi-Track",
@@ -122,13 +128,13 @@ describe("audit: multi-track preservation (High #1)", () => {
 </fcpxml>`
 
     const { timeline } = readFCPXML(xml)
-    const allClips = timeline.tracks.flatMap((t) => t.clips)
+    const allClips = extractClips(timeline)
 
     expect(allClips.length).toBe(2)
     expect(allClips.find((c) => c.name === "main")).toBeDefined()
     expect(allClips.find((c) => c.name === "overlay")).toBeDefined()
 
-    const videoTracks = timeline.tracks.filter((t) => t.type === "video")
+    const videoTracks = timeline.tracks.filter((t) => t.kind === "video")
     expect(videoTracks.length).toBe(2)
   })
 
@@ -137,10 +143,10 @@ describe("audit: multi-track preservation (High #1)", () => {
     const xml = writeFCPXML(original)
     const { timeline } = readFCPXML(xml)
 
-    const allClips = timeline.tracks.flatMap((t) => t.clips)
+    const allClips = extractClips(timeline)
     expect(allClips.length).toBe(2)
 
-    const videoTracks = timeline.tracks.filter((t) => t.type === "video")
+    const videoTracks = timeline.tracks.filter((t) => t.kind === "video")
     expect(videoTracks.length).toBe(2)
   })
 
@@ -193,10 +199,10 @@ describe("audit: multi-track preservation (High #1)", () => {
 </xmeml>`
 
     const { timeline } = readXMEML(xml)
-    const videoTracks = timeline.tracks.filter((t) => t.type === "video")
+    const videoTracks = timeline.tracks.filter((t) => t.kind === "video")
     expect(videoTracks.length).toBe(2)
-    expect(videoTracks[0].clips[0].name).toBe("main")
-    expect(videoTracks[1].clips[0].name).toBe("overlay")
+    expect(extractClips({ tracks: [videoTracks[0]] })[0].name).toBe("main")
+    expect(extractClips({ tracks: [videoTracks[1]] })[0].name).toBe("overlay")
   })
 
   it("xmeml roundtrips multi-track timeline", () => {
@@ -204,7 +210,7 @@ describe("audit: multi-track preservation (High #1)", () => {
     const xml = writeXMEML(original)
     const { timeline } = readXMEML(xml)
 
-    const videoTracks = timeline.tracks.filter((t) => t.type === "video")
+    const videoTracks = timeline.tracks.filter((t) => t.kind === "video")
     expect(videoTracks.length).toBe(2)
   })
 })
@@ -416,12 +422,12 @@ describe("audit: audio-only FCPXML import (High #4)", () => {
 </fcpxml>`
 
     const { timeline } = readFCPXML(xml)
-    const allClips = timeline.tracks.flatMap((t) => t.clips)
+    const allClips = extractClips(timeline)
 
     expect(allClips.length).toBe(1)
     expect(allClips[0].name).toBe("narration")
 
-    const audioTracks = timeline.tracks.filter((t) => t.type === "audio")
+    const audioTracks = timeline.tracks.filter((t) => t.kind === "audio")
     expect(audioTracks.length).toBe(1)
   })
 
@@ -449,11 +455,11 @@ describe("audit: audio-only FCPXML import (High #4)", () => {
 </fcpxml>`
 
     const { timeline } = readFCPXML(xml)
-    const allClips = timeline.tracks.flatMap((t) => t.clips)
+    const allClips = extractClips(timeline)
     expect(allClips.length).toBe(2)
 
-    const videoTracks = timeline.tracks.filter((t) => t.type === "video")
-    const audioTracks = timeline.tracks.filter((t) => t.type === "audio")
+    const videoTracks = timeline.tracks.filter((t) => t.kind === "video")
+    const audioTracks = timeline.tracks.filter((t) => t.kind === "audio")
     expect(videoTracks.length).toBeGreaterThanOrEqual(1)
     expect(audioTracks.length).toBeGreaterThanOrEqual(1)
   })
@@ -502,11 +508,16 @@ const sparseXmeml = `<?xml version="1.0" encoding="UTF-8"?>
 describe("audit: xmeml sparse file references (Medium #1)", () => {
   it("merges full file definition over sparse reference", () => {
     const { timeline } = readXMEML(sparseXmeml)
-    const asset = timeline.assets.find((a) => a.id === "file-r2")
+    const clip = extractClips(timeline)[0]
 
-    expect(asset).toBeDefined()
-    expect(asset!.path).toBe("/footage/main.mp4")
-    expect(asset!.name).toBe("main.mp4")
+    expect(clip).toBeDefined()
+    expect(clip.mediaReference.type).toBe("external")
+    if (clip.mediaReference.type !== "external") {
+      throw new Error("expected external reference")
+    }
+
+    expect(clip.mediaReference.targetUrl).toBe("file:///footage/main.mp4")
+    expect(clip.mediaReference.name).toBe("main.mp4")
   })
 
   it("warns on sparse file reference with no metadata", () => {

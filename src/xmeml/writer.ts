@@ -1,4 +1,10 @@
-import type { NLETimeline, NLEAsset, NLEClip, ExportOptions } from "../types.js"
+import type {
+  Timeline,
+  NLETimeline,
+  ExportOptions,
+  ExternalReference,
+  Rational,
+} from "../types.js"
 import {
   toFrames,
   frameDuration,
@@ -6,15 +12,21 @@ import {
   isDropFrame,
   nominalFrameRate,
   ZERO,
-  isZero,
   add,
 } from "../time.js"
 import { validateTimeline, computeTimelineDuration } from "../validate.js"
-import type { Rational } from "../types.js"
-import { toFileUrl } from "../file-url.js"
+import {
+  clipDuration,
+  collectAdapterResources,
+  makeWarningEmitter,
+  normalizeTargetUrl,
+  normalizeTimeline,
+  trackClipPlacements,
+  warnOnUnsupportedExportFeatures,
+} from "../adapter-core.js"
 
-function escapeXml(s: string): string {
-  return s
+function escapeXml(value: string): string {
+  return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -33,7 +45,7 @@ class XMLBuilder {
     const pad = "  ".repeat(this.depth)
     const attrStr = attrs
       ? Object.entries(attrs)
-          .map(([k, v]) => ` ${k}="${escapeXml(v)}"`)
+          .map(([key, value]) => ` ${key}="${escapeXml(value)}"`)
           .join("")
       : ""
     this.lines.push(`${pad}<${tag}${attrStr}>`)
@@ -51,19 +63,28 @@ class XMLBuilder {
     this.lines.push(`${pad}<${tag}>${escapeXml(content)}</${tag}>`)
   }
 
-  selfClose(tag: string, attrs?: Record<string, string>): void {
-    const pad = "  ".repeat(this.depth)
-    const attrStr = attrs
-      ? Object.entries(attrs)
-          .map(([k, v]) => ` ${k}="${escapeXml(v)}"`)
-          .join("")
-      : ""
-    this.lines.push(`${pad}<${tag}${attrStr}/>`)
-  }
-
   toString(): string {
     return this.lines.join("\n") + "\n"
   }
+}
+
+interface AdapterResourceRecord {
+  id: string
+  reference: ExternalReference
+}
+
+interface ClipPayload {
+  clip: Timeline["tracks"][number]["items"][number] & { kind: "clip" }
+  resource: AdapterResourceRecord
+  timelineStart: number
+  timelineEnd: number
+  sourceIn: number
+  sourceOut: number
+  resourceFrameRate: Rational
+  videoClipId?: string
+  audioClipId?: string
+  fileId: string
+  index: number
 }
 
 function writeRate(xml: XMLBuilder, frameRate: Rational): void {
@@ -89,39 +110,57 @@ function writeSampleCharacteristics(
   xml.close("samplecharacteristics")
 }
 
+function mediaCapabilities(reference: ExternalReference) {
+  const streamInfo = reference.streamInfo
+  const mediaKind = reference.mediaKind ?? "unknown"
+
+  return {
+    hasVideo: streamInfo?.hasVideo ?? (mediaKind === "video" || mediaKind === "image"),
+    hasAudio: streamInfo?.hasAudio ?? mediaKind === "audio",
+    width: streamInfo?.width ?? 1920,
+    height: streamInfo?.height ?? 1080,
+    frameRate: streamInfo?.frameRate,
+    audioRate: streamInfo?.audioRate ?? 48000,
+    audioChannels: streamInfo?.audioChannels ?? 2,
+  }
+}
+
 function writeFileElement(
   xml: XMLBuilder,
   fileId: string,
-  asset: NLEAsset,
-  assetFrameRate: Rational,
+  reference: ExternalReference,
+  inferredDuration: { num: number; den: number },
+  frameRate: Rational,
 ): void {
-  const fd = frameDuration(assetFrameRate)
-  const assetDurationFrames = toFrames(asset.duration, fd)
-  const tcStartFrames = toFrames(asset.timecodeStart ?? ZERO, fd)
-  const audioRate = String(asset.audioRate ?? 48000)
-  const width = asset.videoFormat?.width ?? 1920
-  const height = asset.videoFormat?.height ?? 1080
+  const caps = mediaCapabilities(reference)
+  const availableRange = reference.availableRange ?? {
+    startTime: ZERO,
+    duration: inferredDuration,
+  }
+  const fd = frameDuration(frameRate)
+  const durationFrames = toFrames(availableRange.duration, fd)
+  const timecodeFrames = toFrames(availableRange.startTime, fd)
 
   xml.open("file", { id: fileId })
-  xml.leaf("name", asset.name)
-  xml.leaf("pathurl", toFileUrl(asset.path))
-  writeRate(xml, assetFrameRate)
-  xml.leaf("duration", String(assetDurationFrames))
+  xml.leaf("name", reference.name ?? reference.targetUrl.split("/").pop() ?? fileId)
+  xml.leaf("pathurl", normalizeTargetUrl(reference.targetUrl))
+  writeRate(xml, frameRate)
+  xml.leaf("duration", String(durationFrames))
   xml.open("timecode")
-  writeRate(xml, assetFrameRate)
-  xml.leaf("frame", String(tcStartFrames))
-  xml.leaf("displayformat", isDropFrame(assetFrameRate) ? "DF" : "NDF")
+  writeRate(xml, frameRate)
+  xml.leaf("frame", String(timecodeFrames))
+  xml.leaf("displayformat", isDropFrame(frameRate) ? "DF" : "NDF")
   xml.close("timecode")
   xml.open("media")
-  if (asset.hasVideo) {
+  if (caps.hasVideo) {
     xml.open("video")
-    writeSampleCharacteristics(xml, assetFrameRate, width, height)
+    writeSampleCharacteristics(xml, frameRate, caps.width, caps.height)
     xml.close("video")
   }
-  if (asset.hasAudio) {
+  if (caps.hasAudio) {
     xml.open("audio")
     xml.open("samplecharacteristics")
-    xml.leaf("samplerate", audioRate)
+    xml.leaf("samplerate", String(caps.audioRate))
     xml.leaf("sampledepth", "16")
     xml.close("samplecharacteristics")
     xml.close("audio")
@@ -156,122 +195,100 @@ function writeLinkEntries(
   }
 }
 
-interface ClipPayload {
-  index: number
-  clip: NLEClip
-  asset: NLEAsset
-  videoClipId?: string
-  audioClipId?: string
-  fileId: string
-  timelineStart: number
-  timelineEnd: number
-  sourceIn: number
-  sourceOut: number
-  assetFrameRate: Rational
-}
-
 function buildPayloads(
-  clips: NLEClip[],
-  assetMap: Map<string, NLEAsset>,
-  timelineFrameRate: Rational,
-  indexOffset = 0,
+  timeline: Timeline,
+  track: Timeline["tracks"][number],
+  resources: ReturnType<typeof collectAdapterResources>,
+  indexOffset: number,
+  emitWarning: (warning: string) => void,
 ): ClipPayload[] {
-  const tlFd = frameDuration(timelineFrameRate)
+  const resourceMap = new Map(resources.map((resource) => [resource.reference.targetUrl, resource]))
+  const tlFd = frameDuration(timeline.format.frameRate)
 
-  return clips.map((clip, i) => {
-    const asset = assetMap.get(clip.assetId)
-    if (!asset) throw new Error(`Asset not found: ${clip.assetId}`)
-
-    const assetFrameRate = asset.videoFormat?.frameRate ?? timelineFrameRate
-    const assetFd = frameDuration(assetFrameRate)
-
-    const timelineStart = toFrames(clip.offset, tlFd)
-    const timelineDuration = toFrames(clip.duration, tlFd)
-    const timelineEnd = timelineStart + timelineDuration
-
-    const tcStartFrames = toFrames(asset.timecodeStart ?? ZERO, assetFd)
-    const sourceIn = toFrames(clip.sourceIn, assetFd) + tcStartFrames
-    const sourceDuration = toFrames(clip.sourceDuration, assetFd)
-    const sourceOut = sourceIn + sourceDuration
-
-    const idx = i + 1 + indexOffset
-    return {
-      index: idx,
-      clip,
-      asset,
-      videoClipId: `clipitem-video-${idx}`,
-      audioClipId: `clipitem-audio-${idx}`,
-      fileId: `file-${asset.id}`,
-      timelineStart,
-      timelineEnd,
-      sourceIn,
-      sourceOut,
-      assetFrameRate,
+  return trackClipPlacements(track, emitWarning).flatMap((placement, index) => {
+    if (placement.clip.mediaReference.type !== "external") {
+      emitWarning("Missing media references are not supported in this export format and were dropped")
+      return []
     }
+
+    const resource = resourceMap.get(normalizeTargetUrl(placement.clip.mediaReference.targetUrl))
+    if (!resource) return []
+
+    const resourceFrameRate = placement.clip.mediaReference.streamInfo?.frameRate ?? timeline.format.frameRate
+    const resourceFd = frameDuration(resourceFrameRate)
+    const availableStart = placement.clip.mediaReference.availableRange?.startTime ?? ZERO
+    const sourceStart = add(availableStart, placement.clip.sourceRange?.startTime ?? ZERO)
+    const sourceDuration = clipDuration(placement.clip)
+    const clipIndex = indexOffset + index + 1
+    const caps = mediaCapabilities(placement.clip.mediaReference)
+
+    return [{
+      clip: placement.clip,
+      resource: {
+        id: resource.id,
+        reference: resource.reference,
+      },
+      timelineStart: toFrames(placement.offset, tlFd),
+      timelineEnd: toFrames(add(placement.offset, sourceDuration), tlFd),
+      sourceIn: toFrames(sourceStart, resourceFd),
+      sourceOut: toFrames(add(sourceStart, sourceDuration), resourceFd),
+      resourceFrameRate,
+      videoClipId: caps.hasVideo ? `clipitem-video-${clipIndex}` : undefined,
+      audioClipId: caps.hasAudio ? `clipitem-audio-${clipIndex}` : undefined,
+      fileId: `file-${resource.id}`,
+      index: clipIndex,
+    }]
   })
 }
 
 /**
- * Generate FCP7 XML (xmeml v5) from an NLETimeline.
- * Compatible with Adobe Premiere Pro and DaVinci Resolve.
+ * Generate FCP7 XML (xmeml v5) from a Timeline.
  */
 export function writeXMEML(
-  timeline: NLETimeline,
+  timelineInput: Timeline | NLETimeline,
   options?: ExportOptions,
 ): string {
-  const errors = validateTimeline(timeline)
-  const hardErrors = errors.filter((e) => e.type === "error")
+  const errors = validateTimeline(timelineInput)
+  const hardErrors = errors.filter((error) => error.type === "error")
   if (hardErrors.length > 0) {
     throw new Error(
-      `Timeline validation failed:\n${hardErrors.map((e) => `  - ${e.message}`).join("\n")}`,
+      `Timeline validation failed:\n${hardErrors.map((error) => `  - ${error.message}`).join("\n")}`,
     )
   }
 
-  const assetMap = new Map(timeline.assets.map((a) => [a.id, a]))
+  const timeline = normalizeTimeline(timelineInput)
+  const emitWarning = makeWarningEmitter(options)
+  warnOnUnsupportedExportFeatures(timeline, emitWarning)
+
   const tlFrameRate = timeline.format.frameRate
   const tlFd = frameDuration(tlFrameRate)
-  const sequenceDuration = computeTimelineDuration(timeline)
-  const sequenceDurationFrames = toFrames(sequenceDuration, tlFd)
-  const audioRate = String(timeline.format.audioRate)
+  const sequenceDurationFrames = toFrames(computeTimelineDuration(timeline), tlFd)
+  const sequenceTimecodeFrames = toFrames(timeline.globalStartTime ?? ZERO, tlFd)
+  const resources = collectAdapterResources(timeline)
 
-  const videoTracks = timeline.tracks.filter((t) => t.type === "video")
-  const allTrackPayloads: { payloads: ClipPayload[]; trackIndex: number }[] = []
+  const videoTracks = timeline.tracks.filter((track) => track.kind === "video")
+  const audioTracks = timeline.tracks.filter((track) => track.kind === "audio")
+
   let globalIndex = 0
-  let trackIndex = 1
-  for (const vTrack of videoTracks) {
-    const sorted = [...vTrack.clips].sort(
-      (a, b) => a.offset.num / a.offset.den - b.offset.num / b.offset.den,
-    )
-    const trackPayloads = buildPayloads(sorted, assetMap, tlFrameRate, globalIndex)
-    allTrackPayloads.push({ payloads: trackPayloads, trackIndex })
-    globalIndex += trackPayloads.length
-    trackIndex++
-  }
-
-  const audioTracks = timeline.tracks.filter((t) => t.type === "audio")
-  const audioOnlyPayloads: { payloads: ClipPayload[]; trackIndex: number }[] = []
-  let aTrackIndex = trackIndex
-  for (const aTrack of audioTracks) {
-    const sorted = [...aTrack.clips].sort(
-      (a, b) => a.offset.num / a.offset.den - b.offset.num / b.offset.den,
-    )
-    const trackPayloads = buildPayloads(sorted, assetMap, tlFrameRate, globalIndex)
-    // Clear videoClipId for audio-only tracks so they don't link to non-existent video
-    for (const p of trackPayloads) {
-      p.videoClipId = undefined
-    }
-    audioOnlyPayloads.push({ payloads: trackPayloads, trackIndex: aTrackIndex })
-    globalIndex += trackPayloads.length
-    aTrackIndex++
-  }
-
-  const sequenceId = `sequence-1`
+  const videoPayloads = videoTracks.map((track) => {
+    const payloads = buildPayloads(timeline, track, resources, globalIndex, emitWarning)
+    globalIndex += payloads.length
+    return payloads
+  })
+  const audioOnlyPayloads = audioTracks.map((track) => {
+    const payloads = buildPayloads(timeline, track, resources, globalIndex, emitWarning).map((payload) => ({
+      ...payload,
+      videoClipId: undefined,
+    }))
+    globalIndex += payloads.length
+    return payloads
+  })
 
   const xml = new XMLBuilder()
   xml.raw(`<?xml version="1.0" encoding="UTF-8"?>`)
   xml.raw(`<!DOCTYPE xmeml>`)
   xml.open("xmeml", { version: "5" })
-  xml.open("sequence", { id: sequenceId })
+  xml.open("sequence", { id: "sequence-1" })
   xml.leaf("name", timeline.name)
   xml.leaf("duration", String(sequenceDurationFrames))
   writeRate(xml, tlFrameRate)
@@ -279,44 +296,35 @@ export function writeXMEML(
   xml.leaf("out", String(sequenceDurationFrames))
   xml.open("timecode")
   writeRate(xml, tlFrameRate)
-  xml.leaf("frame", "0")
+  xml.leaf("frame", String(sequenceTimecodeFrames))
   xml.leaf("displayformat", isDropFrame(tlFrameRate) ? "DF" : "NDF")
   xml.close("timecode")
-
   xml.open("media")
 
   xml.open("video")
   xml.open("format")
-  writeSampleCharacteristics(
-    xml,
-    tlFrameRate,
-    timeline.format.width,
-    timeline.format.height,
-  )
+  writeSampleCharacteristics(xml, tlFrameRate, timeline.format.width, timeline.format.height)
   xml.close("format")
-  for (const { payloads: trackPayloads, trackIndex } of allTrackPayloads) {
+  for (let trackIndex = 0; trackIndex < videoPayloads.length; trackIndex++) {
     xml.open("track")
-    for (const payload of trackPayloads) {
-      xml.open("clipitem", { id: payload.videoClipId! })
-      xml.leaf("name", payload.clip.name || payload.asset.name.replace(/\.[^.]+$/, ""))
-      xml.leaf("enabled", "TRUE")
+    for (const payload of videoPayloads[trackIndex]) {
+      if (!payload.videoClipId) continue
+
+      xml.open("clipitem", { id: payload.videoClipId })
+      xml.leaf("name", payload.clip.name)
+      xml.leaf("enabled", payload.clip.enabled === false ? "FALSE" : "TRUE")
       xml.leaf("duration", String(payload.timelineEnd - payload.timelineStart))
       xml.leaf("start", String(payload.timelineStart))
       xml.leaf("end", String(payload.timelineEnd))
       xml.leaf("in", String(payload.sourceIn))
       xml.leaf("out", String(payload.sourceOut))
-      writeFileElement(xml, payload.fileId, payload.asset, payload.assetFrameRate)
+      const resource = resources.find((entry) => entry.id === payload.resource.id)!
+      writeFileElement(xml, payload.fileId, payload.resource.reference, resource.inferredDuration, payload.resourceFrameRate)
       xml.open("sourcetrack")
       xml.leaf("mediatype", "video")
-      xml.leaf("trackindex", String(trackIndex))
+      xml.leaf("trackindex", String(trackIndex + 1))
       xml.close("sourcetrack")
-      writeLinkEntries(
-        xml,
-        payload.videoClipId,
-        payload.audioClipId,
-        payload.index,
-        trackIndex,
-      )
+      writeLinkEntries(xml, payload.videoClipId, payload.audioClipId, payload.index, trackIndex + 1)
       xml.close("clipitem")
     }
     xml.close("track")
@@ -327,35 +335,32 @@ export function writeXMEML(
   xml.leaf("numOutputChannels", "2")
   xml.open("format")
   xml.open("samplecharacteristics")
-  xml.leaf("samplerate", audioRate)
+  xml.leaf("samplerate", String(timeline.format.audioRate))
   xml.leaf("sampledepth", "16")
   xml.close("samplecharacteristics")
   xml.close("format")
-  const combinedAudio = [...allTrackPayloads, ...audioOnlyPayloads]
-  for (const { payloads: trackPayloads, trackIndex } of combinedAudio) {
+
+  const combinedAudioTracks = [...videoPayloads, ...audioOnlyPayloads]
+  for (let trackIndex = 0; trackIndex < combinedAudioTracks.length; trackIndex++) {
     xml.open("track")
-    for (const payload of trackPayloads) {
-      xml.open("clipitem", { id: payload.audioClipId! })
-      xml.leaf("name", payload.clip.name || payload.asset.name.replace(/\.[^.]+$/, ""))
-      xml.leaf("enabled", "TRUE")
+    for (const payload of combinedAudioTracks[trackIndex]) {
+      if (!payload.audioClipId) continue
+
+      xml.open("clipitem", { id: payload.audioClipId })
+      xml.leaf("name", payload.clip.name)
+      xml.leaf("enabled", payload.clip.enabled === false ? "FALSE" : "TRUE")
       xml.leaf("duration", String(payload.timelineEnd - payload.timelineStart))
       xml.leaf("start", String(payload.timelineStart))
       xml.leaf("end", String(payload.timelineEnd))
       xml.leaf("in", String(payload.sourceIn))
       xml.leaf("out", String(payload.sourceOut))
-      writeFileElement(xml, payload.fileId, payload.asset, payload.assetFrameRate)
+      const resource = resources.find((entry) => entry.id === payload.resource.id)!
+      writeFileElement(xml, payload.fileId, payload.resource.reference, resource.inferredDuration, payload.resourceFrameRate)
       xml.open("sourcetrack")
       xml.leaf("mediatype", "audio")
-      xml.leaf("trackindex", String(trackIndex))
+      xml.leaf("trackindex", String(trackIndex + 1))
       xml.close("sourcetrack")
-      xml.leaf("channelcount", "2")
-      writeLinkEntries(
-        xml,
-        payload.videoClipId,
-        payload.audioClipId,
-        payload.index,
-        trackIndex,
-      )
+      writeLinkEntries(xml, payload.videoClipId, payload.audioClipId, payload.index, trackIndex + 1)
       xml.close("clipitem")
     }
     xml.close("track")

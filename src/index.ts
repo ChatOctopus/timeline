@@ -80,7 +80,6 @@ import { writeXMEML } from "./xmeml/writer.js"
 import { readXMEML } from "./xmeml/reader.js"
 import { writeOTIO } from "./otio/writer.js"
 import { readOTIO } from "./otio/reader.js"
-import { coreToLegacyTimeline, isLegacyTimeline } from "./core-legacy.js"
 
 const EDITOR_FORMAT_MAP: Record<NLEEditor, NLEExportFormat> = {
   fcpx: "fcpxml",
@@ -104,13 +103,12 @@ export function exportTimeline(
 ): string {
   const format = EDITOR_FORMAT_MAP[editor]
   const fullOptions: ExportOptions = { ...options, format }
-  const legacyTimeline = isLegacyTimeline(timeline) ? timeline : coreToLegacyTimeline(timeline)
 
   switch (format) {
     case "fcpxml":
-      return writeFCPXML(legacyTimeline, fullOptions)
+      return writeFCPXML(timeline, fullOptions)
     case "xmeml":
-      return writeXMEML(legacyTimeline, fullOptions)
+      return writeXMEML(timeline, fullOptions)
     case "otio":
       return writeOTIO(timeline)
     default:

@@ -180,10 +180,12 @@ export interface ExportOptions {
   format: NLEExportFormat
   /** Volume adjustment in dB (default: 0) */
   volumeDb?: number
+  /** Called when a target format cannot represent some core-model data exactly */
+  onWarning?: (warning: string) => void
 }
 
 export interface ImportResult {
-  timeline: Timeline | NLETimeline
+  timeline: Timeline
   /** Warnings encountered during parsing (non-fatal issues) */
   warnings: string[]
 }

@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest"
 import { writeFCPXML } from "../src/fcpxml/writer.js"
 import { readFCPXML } from "../src/fcpxml/reader.js"
-import type { NLETimeline } from "../src/types.js"
-import { rational, ZERO, toSeconds, toFCPString } from "../src/time.js"
+import type { Timeline, TrackItem } from "../src/types.js"
+import { rational, ZERO, toSeconds } from "../src/time.js"
 
-function makeTimeline(overrides?: Partial<NLETimeline>): NLETimeline {
+function makeTimeline(overrides?: Partial<Timeline>): Timeline {
   return {
     name: "Test Project",
     format: {
@@ -14,51 +14,74 @@ function makeTimeline(overrides?: Partial<NLETimeline>): NLETimeline {
       audioRate: 48000,
       colorSpace: "1-1-1 (Rec. 709)",
     },
-    assets: [
-      {
-        id: "r2",
-        name: "clip1.mp4",
-        path: "/videos/clip1.mp4",
-        duration: rational(300 * 1001, 30000),
-        hasVideo: true,
-        hasAudio: true,
-        audioChannels: 2,
-        audioRate: 48000,
-        timecodeStart: ZERO,
-      },
-      {
-        id: "r3",
-        name: "clip2.mp4",
-        path: "/videos/clip2.mp4",
-        duration: rational(600 * 1001, 30000),
-        hasVideo: true,
-        hasAudio: true,
-        audioChannels: 2,
-        audioRate: 48000,
-        timecodeStart: ZERO,
-      },
-    ],
     tracks: [
       {
-        type: "video",
-        clips: [
+        kind: "video",
+        name: "V1",
+        items: [
           {
-            assetId: "r2",
+            kind: "clip",
             name: "clip1",
-            offset: ZERO,
-            duration: rational(150 * 1001, 30000),
-            sourceIn: ZERO,
-            sourceDuration: rational(150 * 1001, 30000),
-            audioRole: "dialogue",
+            mediaReference: {
+              type: "external",
+              name: "clip1.mp4",
+              targetUrl: "file:///videos/clip1.mp4",
+              mediaKind: "video",
+              availableRange: {
+                startTime: ZERO,
+                duration: rational(300 * 1001, 30000),
+              },
+              streamInfo: {
+                hasVideo: true,
+                hasAudio: true,
+                width: 1920,
+                height: 1080,
+                frameRate: rational(30000, 1001),
+                audioRate: 48000,
+                audioChannels: 2,
+              },
+            },
+            sourceRange: {
+              startTime: ZERO,
+              duration: rational(150 * 1001, 30000),
+            },
+            metadata: {
+              audioRole: "dialogue",
+            },
           },
           {
-            assetId: "r3",
+            kind: "gap",
+            sourceRange: {
+              startTime: ZERO,
+              duration: rational(30 * 1001, 30000),
+            },
+          },
+          {
+            kind: "clip",
             name: "clip2",
-            offset: rational(150 * 1001, 30000),
-            duration: rational(300 * 1001, 30000),
-            sourceIn: rational(60 * 1001, 30000),
-            sourceDuration: rational(300 * 1001, 30000),
-            audioRole: "dialogue",
+            mediaReference: {
+              type: "external",
+              name: "clip2.mp4",
+              targetUrl: "file:///videos/clip2.mp4",
+              mediaKind: "video",
+              availableRange: {
+                startTime: ZERO,
+                duration: rational(600 * 1001, 30000),
+              },
+              streamInfo: {
+                hasVideo: true,
+                hasAudio: true,
+                width: 1920,
+                height: 1080,
+                frameRate: rational(30000, 1001),
+                audioRate: 48000,
+                audioChannels: 2,
+              },
+            },
+            sourceRange: {
+              startTime: rational(60 * 1001, 30000),
+              duration: rational(300 * 1001, 30000),
+            },
           },
         ],
       },
@@ -67,8 +90,17 @@ function makeTimeline(overrides?: Partial<NLETimeline>): NLETimeline {
   }
 }
 
+function expectClip(item: TrackItem) {
+  expect(item.kind).toBe("clip")
+  if (item.kind !== "clip") {
+    throw new Error("expected clip")
+  }
+
+  return item
+}
+
 describe("writeFCPXML", () => {
-  it("generates valid FCPXML structure", () => {
+  it("generates valid FCPXML structure from the core model", () => {
     const xml = writeFCPXML(makeTimeline())
 
     expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>')
@@ -81,13 +113,12 @@ describe("writeFCPXML", () => {
 
   it("includes format with frame duration", () => {
     const xml = writeFCPXML(makeTimeline())
-    // 29.97fps -> frameDuration = 1001/30000s
     expect(xml).toContain('frameDuration="1001/30000s"')
     expect(xml).toContain('width="1920"')
     expect(xml).toContain('height="1080"')
   })
 
-  it("includes assets with file URLs", () => {
+  it("includes assets deduped from media references", () => {
     const xml = writeFCPXML(makeTimeline())
     expect(xml).toContain('src="file:///videos/clip1.mp4"')
     expect(xml).toContain('src="file:///videos/clip2.mp4"')
@@ -95,22 +126,42 @@ describe("writeFCPXML", () => {
     expect(xml).toContain('hasAudio="1"')
   })
 
-  it("generates asset-clips in spine sorted by offset", () => {
+  it("writes explicit gaps from the primary track", () => {
     const xml = writeFCPXML(makeTimeline())
-    const clip1Pos = xml.indexOf('name="clip1"')
-    const clip2Pos = xml.indexOf('name="clip2"')
-    expect(clip1Pos).toBeLessThan(clip2Pos)
+    expect(xml).toContain("<gap")
   })
 
-  it("includes volume adjustment when specified", () => {
-    const xml = writeFCPXML(makeTimeline(), { format: "fcpxml", volumeDb: -13 })
-    expect(xml).toContain("adjust-volume")
-    expect(xml).toContain("-13dB")
-  })
+  it("surfaces warnings when dropping unsupported core-only fields", () => {
+    const warnings: string[] = []
+    const xml = writeFCPXML(
+      makeTimeline({
+        metadata: { project: "demo" },
+        markers: [{ name: "intro" }],
+        tracks: [
+          {
+            kind: "video",
+            items: [
+              {
+                kind: "transition",
+                name: "cross-dissolve",
+                inOffset: rational(10, 30),
+                outOffset: rational(10, 30),
+              },
+              ...makeTimeline().tracks[0].items,
+            ],
+          },
+        ],
+      }),
+      {
+        format: "fcpxml",
+        onWarning: (warning) => warnings.push(warning),
+      },
+    )
 
-  it("omits volume adjustment when not specified", () => {
-    const xml = writeFCPXML(makeTimeline())
-    expect(xml).not.toContain("adjust-volume")
+    expect(xml).toContain("<fcpxml")
+    expect(warnings.some((warning) => warning.toLowerCase().includes("transition"))).toBe(true)
+    expect(warnings.some((warning) => warning.toLowerCase().includes("metadata"))).toBe(true)
+    expect(warnings.some((warning) => warning.toLowerCase().includes("marker"))).toBe(true)
   })
 
   it("throws on invalid timeline", () => {
@@ -118,26 +169,22 @@ describe("writeFCPXML", () => {
       "validation failed",
     )
   })
-
-  it("throws on missing asset reference", () => {
-    const timeline = makeTimeline()
-    timeline.tracks[0].clips[0].assetId = "nonexistent"
-    expect(() => writeFCPXML(timeline)).toThrow("validation failed")
-  })
 })
 
 describe("readFCPXML", () => {
-  it("roundtrips through write/read", () => {
-    const original = makeTimeline()
-    const xml = writeFCPXML(original)
-    const { timeline, warnings } = readFCPXML(xml)
+  it("roundtrips through write/read into the core model", () => {
+    const xml = writeFCPXML(makeTimeline())
+    const { timeline } = readFCPXML(xml)
 
     expect(timeline.name).toBe("Test Project")
     expect(timeline.format.width).toBe(1920)
     expect(timeline.format.height).toBe(1080)
-    expect(timeline.assets.length).toBe(2)
     expect(timeline.tracks.length).toBe(1)
-    expect(timeline.tracks[0].clips.length).toBe(2)
+    expect(timeline.tracks[0].items.map((item) => item.kind)).toEqual([
+      "clip",
+      "gap",
+      "clip",
+    ])
   })
 
   it("preserves clip timing through roundtrip", () => {
@@ -145,30 +192,38 @@ describe("readFCPXML", () => {
     const xml = writeFCPXML(original)
     const { timeline } = readFCPXML(xml)
 
-    const origClips = original.tracks[0].clips
-    const parsedClips = timeline.tracks[0].clips
+    const originalClips = original.tracks[0].items.filter((item) => item.kind === "clip")
+    const parsedItems = timeline.tracks[0].items
 
-    for (let i = 0; i < origClips.length; i++) {
-      expect(toSeconds(parsedClips[i].offset)).toBeCloseTo(
-        toSeconds(origClips[i].offset),
-        3,
-      )
-      expect(toSeconds(parsedClips[i].duration)).toBeCloseTo(
-        toSeconds(origClips[i].duration),
-        3,
-      )
-    }
+    const parsedFirst = expectClip(parsedItems[0])
+    const parsedSecond = expectClip(parsedItems[2])
+
+    expect(toSeconds(parsedFirst.sourceRange?.duration ?? ZERO)).toBeCloseTo(
+      toSeconds(originalClips[0].sourceRange?.duration ?? ZERO),
+      3,
+    )
+    expect(toSeconds(parsedSecond.sourceRange?.startTime ?? ZERO)).toBeCloseTo(
+      toSeconds(originalClips[1].sourceRange?.startTime ?? ZERO),
+      3,
+    )
   })
 
-  it("extracts asset metadata", () => {
+  it("extracts inline media references", () => {
     const xml = writeFCPXML(makeTimeline())
     const { timeline } = readFCPXML(xml)
 
-    const asset = timeline.assets.find((a) => a.id === "r2")
-    expect(asset).toBeDefined()
-    expect(asset!.name).toBe("clip1.mp4")
-    expect(asset!.hasVideo).toBe(true)
-    expect(asset!.hasAudio).toBe(true)
+    const firstClip = expectClip(timeline.tracks[0].items[0])
+    expect(firstClip.mediaReference.type).toBe("external")
+    if (firstClip.mediaReference.type !== "external") {
+      throw new Error("expected external reference")
+    }
+
+    expect(firstClip.mediaReference.name).toBe("clip1.mp4")
+    expect(firstClip.mediaReference.targetUrl).toBe("file:///videos/clip1.mp4")
+    expect(firstClip.mediaReference.streamInfo).toMatchObject({
+      hasVideo: true,
+      hasAudio: true,
+    })
   })
 
   it("throws on invalid XML", () => {
@@ -204,7 +259,7 @@ describe("readFCPXML", () => {
   </library>
 </fcpxml>`
     const { warnings } = readFCPXML(xml)
-    expect(warnings.some((w) => w.includes("version 2.0"))).toBe(true)
+    expect(warnings.some((warning) => warning.includes("version 2.0"))).toBe(true)
   })
 
   it("warns on unsupported spine elements like mc-clip and title", () => {
@@ -230,9 +285,9 @@ describe("readFCPXML", () => {
   </library>
 </fcpxml>`
     const { timeline, warnings } = readFCPXML(xml)
-    expect(timeline.tracks[0].clips).toHaveLength(1)
-    expect(warnings.some((w) => w.includes("<mc-clip>"))).toBe(true)
-    expect(warnings.some((w) => w.includes("<title>"))).toBe(true)
+    expect(timeline.tracks[0].items).toHaveLength(1)
+    expect(warnings.some((warning) => warning.includes("<mc-clip>"))).toBe(true)
+    expect(warnings.some((warning) => warning.includes("<title>"))).toBe(true)
   })
 
   it("parses minimal FCPXML", () => {
