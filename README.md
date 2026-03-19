@@ -4,7 +4,7 @@ Import and export video editing timelines for Final Cut Pro, Adobe Premiere Pro,
 
 Generates well-formed FCPXML 1.8 (Final Cut Pro), FCP7 XML / xmeml v5 (Premiere, Resolve), and OTIO (OpenTimelineIO) with frame-accurate rational time math -- no floating-point drift.
 
-Phase 1 checkpoint: the package now exports a new OTIO-first core model (`Timeline`, `Track`, `TrackItem`, `MediaReference`, `Marker`, `TimeRange`) plus core validation/duration utilities that understand it. The format adapters and builder APIs are still on the legacy adapter-backed path and will be migrated in later phases.
+Phase 2 checkpoint: the package now reads and writes OTIO directly against the OTIO-first core model (`Timeline`, `Track`, `TrackItem`, `MediaReference`, `Marker`, `TimeRange`). Metadata, markers, gaps, transitions, global start time, and inline media references round-trip through OTIO. FCPXML, xmeml, and `buildTimeline()` still use the temporary legacy bridge while the migration continues.
 
 ## Installation
 
@@ -110,7 +110,7 @@ writeFileSync("wedding.otio", exportTimeline(timeline, "otio"))
 
 ### Construct a timeline manually
 
-For full control, build the `NLETimeline` object directly. All timing uses `Rational` numbers (`{ num, den }`) to stay frame-aligned.
+For full control, build the OTIO-first `Timeline` model directly. All timing uses `Rational` numbers (`{ num, den }`) to stay frame-aligned.
 
 ```ts
 import {
@@ -119,10 +119,10 @@ import {
   ZERO,
   FRAME_RATES,
 } from "@chatoctopus/timeline"
-import type { NLETimeline } from "@chatoctopus/timeline"
+import type { Timeline } from "@chatoctopus/timeline"
 import { writeFileSync } from "fs"
 
-const timeline: NLETimeline = {
+const timeline: Timeline = {
   name: "My Edit",
   format: {
     width: 1920,
@@ -131,39 +131,42 @@ const timeline: NLETimeline = {
     audioRate: 48000,
     colorSpace: "1-1-1 (Rec. 709)",
   },
-  assets: [
-    {
-      id: "r2",
-      name: "interview.mp4",
-      path: "/footage/interview.mp4",
-      duration: rational(9000 * 1001, 30000), // 9000 frames at 29.97fps
-      hasVideo: true,
-      hasAudio: true,
-      audioChannels: 2,
-      audioRate: 48000,
-      timecodeStart: ZERO,
-    },
-  ],
   tracks: [
     {
-      type: "video",
-      clips: [
+      kind: "video",
+      name: "V1",
+      items: [
         {
-          assetId: "r2",
+          kind: "clip",
           name: "interview",
-          offset: ZERO, // starts at timeline 0
-          duration: rational(150 * 1001, 30000), // 150 frames = ~5 seconds
-          sourceIn: rational(300 * 1001, 30000), // start from frame 300 in source
-          sourceDuration: rational(150 * 1001, 30000),
-          audioRole: "dialogue",
+          mediaReference: {
+            type: "external",
+            name: "interview.mp4",
+            targetUrl: "file:///footage/interview.mp4",
+            mediaKind: "video",
+            availableRange: {
+              startTime: ZERO,
+              duration: rational(9000 * 1001, 30000), // 9000 frames at 29.97fps
+            },
+          },
+          sourceRange: {
+            startTime: rational(300 * 1001, 30000), // start from frame 300 in source
+            duration: rational(150 * 1001, 30000), // 150 frames = ~5 seconds
+          },
+          metadata: {
+            role: "dialogue",
+          },
         },
       ],
     },
   ],
 }
 
+writeFileSync("output.otio", exportTimeline(timeline, "otio"))
 writeFileSync("output.fcpxml", exportTimeline(timeline, "fcpx"))
 ```
+
+`Timeline` is the preferred API for new OTIO-driven work. `NLETimeline` still exists temporarily so the older FCPXML/xmeml builders and readers can keep working during the migration.
 
 ## API Reference
 
@@ -171,20 +174,20 @@ writeFileSync("output.fcpxml", exportTimeline(timeline, "fcpx"))
 
 | Function                                     | Description                                                                            |
 | -------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `exportTimeline(timeline, editor, options?)` | Export an `NLETimeline`. `editor` is `"fcpx"`, `"premiere"`, `"resolve"`, or `"otio"`. |
-| `importTimeline(content)`                    | Parse FCPXML, xmeml, or OTIO into an `NLETimeline`. Auto-detects format.               |
-| `buildTimeline(name, clips)`                 | Build an `NLETimeline` from `ClipInput[]` by probing files with FFprobe.               |
+| `exportTimeline(timeline, editor, options?)` | Export a `Timeline` or `NLETimeline`. `editor` is `"fcpx"`, `"premiere"`, `"resolve"`, or `"otio"`. |
+| `importTimeline(content)`                    | Parse FCPXML, xmeml, or OTIO. OTIO currently imports into `Timeline`; FCPXML/xmeml still import into `NLETimeline` during migration. |
+| `buildTimeline(name, clips)`                 | Build an `NLETimeline` from `ClipInput[]` by probing files with FFprobe. |
 
 ### Format-Specific Functions
 
 | Function                          | Description                        |
 | --------------------------------- | ---------------------------------- |
-| `writeFCPXML(timeline, options?)` | Generate FCPXML 1.8 string         |
-| `readFCPXML(xmlString)`           | Parse FCPXML into `NLETimeline`    |
-| `writeXMEML(timeline, options?)`  | Generate xmeml v5 string           |
-| `readXMEML(xmlString)`            | Parse xmeml into `NLETimeline`     |
-| `writeOTIO(timeline)`             | Generate OTIO JSON string          |
-| `readOTIO(jsonString)`            | Parse OTIO JSON into `NLETimeline` |
+| `writeFCPXML(timeline, options?)` | Generate FCPXML 1.8 string |
+| `readFCPXML(xmlString)`           | Parse FCPXML into `NLETimeline` |
+| `writeXMEML(timeline, options?)`  | Generate xmeml v5 string |
+| `readXMEML(xmlString)`            | Parse xmeml into `NLETimeline` |
+| `writeOTIO(timeline)`             | Generate OTIO JSON from `Timeline` or `NLETimeline` |
+| `readOTIO(jsonString)`            | Parse OTIO JSON into `Timeline` |
 
 ### Time Utilities
 
@@ -235,11 +238,13 @@ interface NLEFormat {
   frameRate: Rational // e.g. { num: 30000, den: 1001 } for 29.97fps
   audioRate: number // e.g. 48000
   colorSpace?: string
+}
+
 type TrackItem = Clip | Gap | Transition
 
 interface Track {
   kind: "video" | "audio"
-  name: string
+  name?: string
   items: TrackItem[]
   metadata?: Record<string, unknown>
   markers?: Marker[]
@@ -286,6 +291,7 @@ interface ExternalReference {
   mediaKind?: "video" | "audio" | "image" | "unknown"
   availableRange?: TimeRange
   metadata?: Record<string, unknown>
+  streamInfo?: StreamInfo
 }
 
 interface MissingReference {
@@ -294,10 +300,21 @@ interface MissingReference {
   metadata?: Record<string, unknown>
 }
 
+interface StreamInfo {
+  hasVideo?: boolean
+  hasAudio?: boolean
+  width?: number
+  height?: number
+  frameRate?: Rational
+  audioRate?: number
+  audioChannels?: number
+  colorSpace?: string
+}
+
 type NLEEditor = "fcpx" | "premiere" | "resolve" | "otio"
 ```
 
-Legacy note: `NLETimeline`, `NLETrack`, `NLEClip`, and `NLEAsset` still exist temporarily while the FCPXML/xmeml/OTIO adapters are migrated to the new core model. Treat them as transitional, not the long-term API.
+Legacy note: `NLETimeline`, `NLETrack`, `NLEClip`, and `NLEAsset` still exist temporarily while the FCPXML/xmeml adapters and builder APIs are migrated to the new core model. Treat them as transitional, not the long-term API.
 
 ## Supported Formats
 
@@ -346,19 +363,25 @@ const timeline = {
     frameRate: FRAME_RATES['29.97'],
     audioRate: 48000,
   },
-  assets: [{
-    id: 'r2', name: 'clip.mp4', path: '/tmp/clip.mp4',
-    duration: rational(300 * 1001, 30000),
-    hasVideo: true, hasAudio: true,
-    audioChannels: 2, audioRate: 48000, timecodeStart: ZERO,
-  }],
   tracks: [{
-    type: 'video',
-    clips: [{
-      assetId: 'r2', name: 'clip', offset: ZERO,
-      duration: rational(150 * 1001, 30000),
-      sourceIn: ZERO,
-      sourceDuration: rational(150 * 1001, 30000),
+    kind: 'video',
+    items: [{
+      kind: 'clip',
+      name: 'clip',
+      mediaReference: {
+        type: 'external',
+        name: 'clip.mp4',
+        targetUrl: 'file:///tmp/clip.mp4',
+        mediaKind: 'video',
+        availableRange: {
+          startTime: ZERO,
+          duration: rational(300 * 1001, 30000),
+        },
+      },
+      sourceRange: {
+        startTime: ZERO,
+        duration: rational(150 * 1001, 30000),
+      },
     }],
   }],
 };
@@ -379,10 +402,11 @@ console.log('Done.');
 ```
 src/
 ├── index.ts           Public API: exportTimeline, importTimeline, buildTimeline
-├── types.ts           NLETimeline, NLEClip, NLEAsset, NLETrack, NLEFormat, Rational
+├── types.ts           OTIO-first core types plus temporary legacy bridge types
 ├── time.ts            Rational arithmetic, frame alignment, SMPTE timecode parsing
 ├── probe.ts           FFprobe metadata extraction
-├── validate.ts        Pre-export validation (reference integrity, frame alignment)
+├── validate.ts        Core + legacy validation and duration computation
+├── core-legacy.ts     Temporary bridge between the core model and legacy adapters
 ├── fcpxml/
 │   ├── writer.ts      FCPXML 1.8 generation
 │   └── reader.ts      FCPXML parsing
@@ -404,7 +428,7 @@ Every clip duration and offset goes through `secondsToFrameAligned()` which snap
 
 - **FCPXML 1.8** for Final Cut Pro -- trackless magnetic timeline with `<asset-clip>` elements inside a `<spine>`
 - **xmeml v5** for Premiere and Resolve -- track-based with linked `<clipitem>` elements for video and audio
-- **OpenTimelineIO** (`.otio`) -- the industry-standard JSON interchange format backed by the Academy Software Foundation. OTIO acts as a universal hub: any tool that speaks OTIO gets instant access to timelines from any other format. Transitions and effects in OTIO files are noted as warnings during import (the core clip/track/timing data is fully preserved).
+- **OpenTimelineIO** (`.otio`) -- the industry-standard JSON interchange format backed by the Academy Software Foundation. OTIO acts as a universal hub: any tool that speaks OTIO gets instant access to timelines from any other format. In this package, OTIO now maps directly to the core model, including explicit gaps, transitions, markers, metadata, and inline media references.
 
 ## Acknowledgments
 

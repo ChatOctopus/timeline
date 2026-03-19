@@ -1,41 +1,77 @@
 import type {
-  NLETimeline,
-  NLEClip,
-  NLEAsset,
-  NLETrack,
+  Timeline,
+  Track,
+  TrackItem,
+  Clip,
+  Gap,
+  Transition,
+  Marker,
+  MediaReference,
+  ExternalReference,
+  MissingReference,
+  Metadata,
   NLEFormat,
   ImportResult,
+  Rational,
+  MediaKind,
+  StreamInfo,
 } from "../types.js"
-import { rational, ZERO, add } from "../time.js"
-import { createHash } from "node:crypto"
+import { rational, ZERO } from "../time.js"
 
-function ensureArray(val: unknown): unknown[] {
-  if (Array.isArray(val)) return val
-  return []
+function ensureArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
 }
 
-function fileUrlToPath(url: string): string {
-  if (url.startsWith("file://")) return decodeURIComponent(url.slice(7))
-  return url
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-function rateToRational(rate: number): { num: number; den: number } {
+function cloneMetadata(value: unknown): Metadata | undefined {
+  return isRecord(value) ? structuredClone(value) : undefined
+}
+
+function stripPackageNamespace(metadata: Metadata | undefined): Metadata | undefined {
+  if (!metadata) return undefined
+  const next = structuredClone(metadata)
+  delete next["@chatoctopus/timeline"]
+  return Object.keys(next).length > 0 ? next : undefined
+}
+
+function packageNamespace(metadata: Metadata | undefined): Record<string, unknown> {
+  if (!metadata) return {}
+  return isRecord(metadata["@chatoctopus/timeline"])
+    ? (metadata["@chatoctopus/timeline"] as Record<string, unknown>)
+    : {}
+}
+
+function inferMediaKind(targetUrl: string): MediaKind {
+  const lower = targetUrl.toLowerCase()
+  if (/\.(png|jpe?g|webp|gif|bmp|tiff?)$/.test(lower)) return "image"
+  if (/\.(wav|mp3|m4a|aac|flac|ogg)$/.test(lower)) return "audio"
+  if (/\.(mp4|mov|mkv|avi|webm|mxf)$/.test(lower)) return "video"
+  return "unknown"
+}
+
+function rateToRational(rate: number): Rational {
   if (Math.abs(rate - Math.round(rate)) < 0.01) {
     return { num: Math.round(rate), den: 1 }
   }
+
   const ntscRates: [number, number, number][] = [
     [23.976, 24000, 1001],
     [29.97, 30000, 1001],
     [47.952, 48000, 1001],
     [59.94, 60000, 1001],
   ]
+
   for (const [approx, num, den] of ntscRates) {
     if (Math.abs(rate - approx) < 0.05) return { num, den }
   }
-  return { num: Math.round(rate * 1000), den: 1000 }
+
+  return rational(Math.round(rate * 1000), 1000)
 }
 
-function parseRationalTime(rt: any): { num: number; den: number } {
+function parseRationalTime(rt: any): Rational {
   if (!rt || rt.OTIO_SCHEMA !== "RationalTime.1") return ZERO
   const rate = rt.rate ?? 24
   const value = Math.round(rt.value ?? 0)
@@ -43,12 +79,194 @@ function parseRationalTime(rt: any): { num: number; den: number } {
   return rational(value * rateRat.den, rateRat.num)
 }
 
+function parseTimeRange(value: any): { startTime: Rational; duration: Rational } | undefined {
+  if (!value || value.OTIO_SCHEMA !== "TimeRange.1") return undefined
+
+  return {
+    startTime: parseRationalTime(value.start_time),
+    duration: parseRationalTime(value.duration),
+  }
+}
+
 function rateFromRationalTime(rt: any): number {
   return rt?.rate ?? 24
 }
 
+function parseMarkers(value: unknown, warnings: string[], context: string): Marker[] | undefined {
+  const markers = ensureArray(value)
+  const parsed: Marker[] = []
+
+  for (const raw of markers) {
+    const marker = raw as any
+    if (marker?.OTIO_SCHEMA !== "Marker.2") {
+      warnings.push(`${context} contains unsupported marker schema: ${marker?.OTIO_SCHEMA ?? "unknown"}`)
+      continue
+    }
+
+    parsed.push({
+      name: marker.name || undefined,
+      color: marker.color ?? null,
+      metadata: stripPackageNamespace(cloneMetadata(marker.metadata)),
+      markedRange: parseTimeRange(marker.marked_range),
+    })
+  }
+
+  return parsed.length > 0 ? parsed : undefined
+}
+
+function warnOnEffects(value: any, warnings: string[], context: string): void {
+  const effects = ensureArray(value?.effects)
+  if (effects.length > 0) {
+    warnings.push(`${context} effects are not supported and were dropped`)
+  }
+}
+
+function parseStreamInfo(value: unknown): StreamInfo | undefined {
+  if (!isRecord(value)) return undefined
+
+  const frameRateValue = value.frameRate
+  const frameRate = isRecord(frameRateValue) &&
+    typeof frameRateValue.num === "number" &&
+    typeof frameRateValue.den === "number"
+    ? { num: frameRateValue.num, den: frameRateValue.den }
+    : undefined
+
+  return {
+    hasVideo: typeof value.hasVideo === "boolean" ? value.hasVideo : undefined,
+    hasAudio: typeof value.hasAudio === "boolean" ? value.hasAudio : undefined,
+    width: typeof value.width === "number" ? value.width : undefined,
+    height: typeof value.height === "number" ? value.height : undefined,
+    frameRate,
+    audioRate: typeof value.audioRate === "number" ? value.audioRate : undefined,
+    audioChannels: typeof value.audioChannels === "number" ? value.audioChannels : undefined,
+    colorSpace: typeof value.colorSpace === "string" ? value.colorSpace : undefined,
+  }
+}
+
+function parseMediaReference(value: any, warnings: string[]): MediaReference {
+  const metadata = cloneMetadata(value?.metadata)
+  const namespace = packageNamespace(metadata)
+  const cleanMetadata = stripPackageNamespace(metadata)
+
+  if (value?.OTIO_SCHEMA === "MissingReference.1") {
+    const reference: MissingReference = {
+      type: "missing",
+      name: value.name || undefined,
+      metadata: cleanMetadata,
+    }
+    return reference
+  }
+
+  if (value?.OTIO_SCHEMA === "ExternalReference.1") {
+    const targetUrl = value.target_url ?? ""
+    const mediaKind = typeof namespace.mediaKind === "string"
+      ? (namespace.mediaKind as MediaKind)
+      : inferMediaKind(targetUrl)
+
+    const reference: ExternalReference = {
+      type: "external",
+      targetUrl,
+      name: value.name || undefined,
+      mediaKind,
+      availableRange: parseTimeRange(value.available_range),
+      metadata: cleanMetadata,
+      streamInfo: parseStreamInfo(namespace.streamInfo),
+    }
+    return reference
+  }
+
+  warnings.push(`Unsupported media reference schema: ${value?.OTIO_SCHEMA ?? "unknown"}`)
+  return {
+    type: "missing",
+    metadata: cleanMetadata,
+  }
+}
+
+function parseClip(value: any, warnings: string[]): Clip {
+  warnOnEffects(value, warnings, `Clip "${value?.name ?? "unknown"}"`)
+
+  const mediaReference =
+    value?.media_references?.[value.active_media_reference_key ?? "DEFAULT_MEDIA"] ??
+    value?.media_reference
+
+  return {
+    kind: "clip",
+    name: value?.name ?? "",
+    mediaReference: parseMediaReference(mediaReference, warnings),
+    sourceRange: parseTimeRange(value?.source_range),
+    metadata: stripPackageNamespace(cloneMetadata(value?.metadata)),
+    markers: parseMarkers(value?.markers, warnings, `Clip "${value?.name ?? "unknown"}"`),
+    enabled: value?.enabled !== false,
+  }
+}
+
+function parseGap(value: any, warnings: string[]): Gap {
+  warnOnEffects(value, warnings, "Gap")
+
+  return {
+    kind: "gap",
+    sourceRange: parseTimeRange(value?.source_range) ?? {
+      startTime: ZERO,
+      duration: ZERO,
+    },
+    metadata: stripPackageNamespace(cloneMetadata(value?.metadata)),
+    enabled: value?.enabled !== false,
+  }
+}
+
+function parseTransition(value: any): Transition {
+  return {
+    kind: "transition",
+    name: value?.name || undefined,
+    transitionType: value?.transition_type || undefined,
+    inOffset: parseRationalTime(value?.in_offset),
+    outOffset: parseRationalTime(value?.out_offset),
+    metadata: stripPackageNamespace(cloneMetadata(value?.metadata)),
+  }
+}
+
+function parseTrack(value: any, warnings: string[]): Track | null {
+  if (value?.OTIO_SCHEMA !== "Track.1") {
+    warnings.push(`Skipping non-Track child with schema: ${value?.OTIO_SCHEMA ?? "unknown"}`)
+    return null
+  }
+
+  warnOnEffects(value, warnings, `Track "${value?.name ?? "unknown"}"`)
+
+  const items: TrackItem[] = []
+  for (const child of ensureArray(value.children)) {
+    const schema = (child as any)?.OTIO_SCHEMA ?? ""
+
+    if (schema.startsWith("Clip.")) {
+      items.push(parseClip(child, warnings))
+      continue
+    }
+
+    if (schema.startsWith("Gap.")) {
+      items.push(parseGap(child, warnings))
+      continue
+    }
+
+    if (schema.startsWith("Transition.")) {
+      items.push(parseTransition(child))
+      continue
+    }
+
+    warnings.push(`Skipping unknown track item with schema: ${schema}`)
+  }
+
+  return {
+    kind: value.kind === "Audio" ? "audio" : "video",
+    name: value.name || undefined,
+    items,
+    metadata: stripPackageNamespace(cloneMetadata(value.metadata)),
+    markers: parseMarkers(value.markers, warnings, `Track "${value?.name ?? "unknown"}"`),
+    enabled: value.enabled !== false,
+  }
+}
+
 /**
- * Parse an OpenTimelineIO (.otio) JSON string into an NLETimeline.
+ * Parse an OpenTimelineIO (.otio) JSON string into the OTIO-first Timeline model.
  */
 export function readOTIO(jsonString: string): ImportResult {
   const warnings: string[] = []
@@ -66,202 +284,36 @@ export function readOTIO(jsonString: string): ImportResult {
     )
   }
 
-  const name = parsed.name ?? "Untitled"
+  warnOnEffects(parsed, warnings, `Timeline "${parsed.name ?? "Untitled"}"`)
+
+  const metadata = cloneMetadata(parsed.metadata)
+  const namespace = packageNamespace(metadata)
+  const formatMeta = isRecord(namespace.format) ? namespace.format : {}
+  const cleanMetadata = stripPackageNamespace(metadata)
   const globalRate = rateFromRationalTime(parsed.global_start_time)
-
-  const otioMeta = parsed.metadata?.["@chatoctopus/timeline"]?.format
-  const width = otioMeta?.width ?? 1920
-  const height = otioMeta?.height ?? 1080
-  const audioRate = otioMeta?.audioRate ?? 48000
-  const colorSpace = otioMeta?.colorSpace ?? undefined
-
-  const frameRateRational = rational(Math.round(globalRate * 1000), 1000)
-  const isNearNTSC = (r: number) =>
-    Math.abs(r - 23.976) < 0.01 ||
-    Math.abs(r - 29.97) < 0.01 ||
-    Math.abs(r - 59.94) < 0.01
-
-  let frameRate = frameRateRational
-  if (isNearNTSC(globalRate)) {
-    const nominal = Math.round(globalRate)
-    frameRate = rational(nominal * 1000, 1001)
-  } else if (globalRate === Math.round(globalRate)) {
-    frameRate = rational(Math.round(globalRate), 1)
-  }
+  const frameRate = rateToRational(globalRate)
 
   const format: NLEFormat = {
-    width,
-    height,
+    width: typeof formatMeta.width === "number" ? formatMeta.width : 1920,
+    height: typeof formatMeta.height === "number" ? formatMeta.height : 1080,
     frameRate,
-    audioRate,
-    colorSpace,
+    audioRate: typeof formatMeta.audioRate === "number" ? formatMeta.audioRate : 48000,
+    colorSpace: typeof formatMeta.colorSpace === "string" ? formatMeta.colorSpace : undefined,
   }
 
-  const assetMap = new Map<string, NLEAsset>()
-  const tracks: NLETrack[] = []
-  const assetCounter = { value: 0 }
+  const tracksStack = parsed.tracks
+  const tracks = ensureArray(tracksStack?.children)
+    .map((track) => parseTrack(track, warnings))
+    .filter((track): track is Track => track !== null)
 
-  const stack = parsed.tracks
-  if (stack?.OTIO_SCHEMA === "Stack.1") {
-    const otioTracks = ensureArray(stack.children)
-    for (const ot of otioTracks) {
-      const track = parseTrack(
-        ot as any,
-        globalRate,
-        format,
-        assetMap,
-        warnings,
-        assetCounter,
-      )
-      if (track) tracks.push(track)
-    }
+  const timeline: Timeline = {
+    name: parsed.name ?? "Untitled",
+    format,
+    tracks,
+    metadata: cleanMetadata,
+    markers: parseMarkers(tracksStack?.markers, warnings, "Timeline"),
+    globalStartTime: parseRationalTime(parsed.global_start_time),
   }
 
-  return {
-    timeline: {
-      name,
-      format,
-      tracks,
-      assets: Array.from(assetMap.values()),
-    },
-    warnings,
-  }
-}
-
-function parseTrack(
-  ot: any,
-  globalRate: number,
-  format: NLEFormat,
-  assetMap: Map<string, NLEAsset>,
-  warnings: string[],
-  assetCounter: { value: number },
-): NLETrack | null {
-  if (ot?.OTIO_SCHEMA !== "Track.1") {
-    warnings.push(`Skipping non-Track child with schema: ${ot?.OTIO_SCHEMA}`)
-    return null
-  }
-
-  const kind = ot.kind ?? "Video"
-  const trackType: "video" | "audio" = kind === "Audio" ? "audio" : "video"
-  const children = ensureArray(ot.children)
-
-  const clips: NLEClip[] = []
-  let currentOffset = ZERO
-
-  for (const child of children) {
-    const c = child as any
-    const schema = c.OTIO_SCHEMA ?? ""
-
-    if (schema.startsWith("Gap.")) {
-      const gapRange = c.source_range
-      if (gapRange) {
-        const gapDur = parseRationalTime(gapRange.duration)
-        currentOffset = add(currentOffset, gapDur)
-      }
-      continue
-    }
-
-    if (schema.startsWith("Clip.")) {
-      const { clip, asset } = parseClip(
-        c,
-        currentOffset,
-        globalRate,
-        format,
-        warnings,
-        assetCounter,
-      )
-      if (clip) {
-        clips.push(clip)
-        if (asset && !assetMap.has(asset.id)) {
-          assetMap.set(asset.id, asset)
-        }
-        currentOffset = add(clip.offset, clip.duration)
-      }
-      continue
-    }
-
-    if (schema.startsWith("Transition.")) {
-      warnings.push(
-        `Transitions are not yet supported (skipping "${c.name ?? "unnamed"}")`,
-      )
-      continue
-    }
-
-    warnings.push(`Skipping unknown element with schema: ${schema}`)
-  }
-
-  return { type: trackType, clips }
-}
-
-function deterministicHash(str: string): string {
-  return createHash("md5").update(str).digest("hex").slice(0, 12)
-}
-
-function parseClip(
-  c: any,
-  offset: { num: number; den: number },
-  globalRate: number,
-  format: NLEFormat,
-  warnings: string[],
-  assetCounter: { value: number },
-): { clip: NLEClip | null; asset: NLEAsset | null } {
-  const sourceRange = c.source_range
-  if (!sourceRange) {
-    warnings.push(`Clip "${c.name ?? "unknown"}" has no source_range`)
-    return { clip: null, asset: null }
-  }
-
-  const rate = rateFromRationalTime(sourceRange.start_time) || globalRate
-  const sourceIn = parseRationalTime(sourceRange.start_time)
-  const duration = parseRationalTime(sourceRange.duration)
-
-  const mediaRef =
-    c.media_references?.[c.active_media_reference_key ?? "DEFAULT_MEDIA"] ??
-    c.media_reference
-
-  let asset: NLEAsset | null = null
-  const idx = ++assetCounter.value
-  let assetId = `otio-asset-${idx}`
-
-  if (mediaRef?.OTIO_SCHEMA === "ExternalReference.1") {
-    const targetUrl = mediaRef.target_url ?? ""
-    const path = fileUrlToPath(targetUrl)
-    assetId = `r-${deterministicHash(path)}`
-
-    const availRange = mediaRef.available_range
-    const assetDuration = availRange
-      ? parseRationalTime(availRange.duration)
-      : duration
-    const assetStart = availRange
-      ? parseRationalTime(availRange.start_time)
-      : ZERO
-
-    asset = {
-      id: assetId,
-      name: mediaRef.name || path.split("/").pop() || "",
-      path,
-      duration: assetDuration,
-      hasVideo: true,
-      hasAudio: true,
-      videoFormat: format,
-      audioChannels: 2,
-      audioRate: format.audioRate,
-      timecodeStart: assetStart,
-    }
-  } else if (mediaRef?.OTIO_SCHEMA === "MissingReference.1") {
-    assetId = `otio-missing-${idx}`
-    warnings.push(`Clip "${c.name ?? "unknown"}" has a missing media reference`)
-  }
-
-  const clip: NLEClip = {
-    assetId,
-    name: c.name ?? "",
-    offset,
-    duration,
-    sourceIn,
-    sourceDuration: duration,
-    enabled: c.enabled !== false,
-  }
-
-  return { clip, asset }
+  return { timeline, warnings }
 }

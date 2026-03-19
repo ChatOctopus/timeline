@@ -1,11 +1,11 @@
-import { describe, it, expect } from "vitest"
+import { describe, expect, it } from "vitest"
 import { writeOTIO } from "../src/otio/writer.js"
 import { readOTIO } from "../src/otio/reader.js"
 import { exportTimeline, importTimeline } from "../src/index.js"
-import type { NLETimeline } from "../src/types.js"
+import type { NLETimeline, Timeline } from "../src/types.js"
 import { rational, ZERO, toSeconds } from "../src/time.js"
 
-function makeTimeline(overrides?: Partial<NLETimeline>): NLETimeline {
+function makeLegacyTimeline(overrides?: Partial<NLETimeline>): NLETimeline {
   return {
     name: "OTIO Test",
     format: {
@@ -66,9 +66,102 @@ function makeTimeline(overrides?: Partial<NLETimeline>): NLETimeline {
   }
 }
 
+function makeCoreTimeline(overrides?: Partial<Timeline>): Timeline {
+  return {
+    name: "OTIO Test",
+    format: {
+      width: 1920,
+      height: 1080,
+      frameRate: rational(24000, 1001),
+      audioRate: 48000,
+      colorSpace: "1-1-1 (Rec. 709)",
+    },
+    tracks: [
+      {
+        kind: "video",
+        name: "V1",
+        items: [
+          {
+            kind: "clip",
+            name: "clip1",
+            mediaReference: {
+              type: "external",
+              name: "clip1.mp4",
+              targetUrl: "file:///videos/clip1.mp4",
+              mediaKind: "video",
+              availableRange: {
+                startTime: ZERO,
+                duration: rational(240 * 1001, 24000),
+              },
+              streamInfo: {
+                hasVideo: true,
+                hasAudio: true,
+                width: 1920,
+                height: 1080,
+                frameRate: rational(24000, 1001),
+                audioRate: 48000,
+                audioChannels: 2,
+              },
+            },
+            sourceRange: {
+              startTime: ZERO,
+              duration: rational(120 * 1001, 24000),
+            },
+          },
+          {
+            kind: "clip",
+            name: "clip2",
+            mediaReference: {
+              type: "external",
+              name: "clip2.mp4",
+              targetUrl: "file:///videos/clip2.mp4",
+              mediaKind: "video",
+              availableRange: {
+                startTime: ZERO,
+                duration: rational(480 * 1001, 24000),
+              },
+              streamInfo: {
+                hasVideo: true,
+                hasAudio: true,
+                width: 1920,
+                height: 1080,
+                frameRate: rational(24000, 1001),
+                audioRate: 48000,
+                audioChannels: 2,
+              },
+            },
+            sourceRange: {
+              startTime: rational(48 * 1001, 24000),
+              duration: rational(240 * 1001, 24000),
+            },
+          },
+        ],
+      },
+    ],
+    ...overrides,
+  }
+}
+
+function expectCoreTimeline(timeline: Timeline | NLETimeline): Timeline {
+  if ("assets" in timeline) {
+    throw new Error("expected OTIO import to return the core Timeline model")
+  }
+
+  return timeline
+}
+
+function expectClip(item: Timeline["tracks"][number]["items"][number]) {
+  expect(item.kind).toBe("clip")
+  if (item.kind !== "clip") {
+    throw new Error("expected clip")
+  }
+
+  return item
+}
+
 describe("writeOTIO", () => {
-  it("generates valid OTIO JSON", () => {
-    const json = writeOTIO(makeTimeline())
+  it("generates valid OTIO JSON from the core model", () => {
+    const json = writeOTIO(makeCoreTimeline())
     const parsed = JSON.parse(json)
 
     expect(parsed.OTIO_SCHEMA).toBe("Timeline.1")
@@ -76,30 +169,24 @@ describe("writeOTIO", () => {
     expect(parsed.tracks.OTIO_SCHEMA).toBe("Stack.1")
   })
 
-  it("includes tracks with correct kind", () => {
-    const json = writeOTIO(makeTimeline())
+  it("includes tracks and clips with OTIO-native structure", () => {
+    const json = writeOTIO(makeCoreTimeline())
     const parsed = JSON.parse(json)
 
     const tracks = parsed.tracks.children
     expect(tracks).toHaveLength(1)
     expect(tracks[0].OTIO_SCHEMA).toBe("Track.1")
     expect(tracks[0].kind).toBe("Video")
-  })
 
-  it("includes clips with source_range", () => {
-    const json = writeOTIO(makeTimeline())
-    const parsed = JSON.parse(json)
-
-    const clips = parsed.tracks.children[0].children
+    const clips = tracks[0].children
     expect(clips).toHaveLength(2)
     expect(clips[0].OTIO_SCHEMA).toBe("Clip.2")
-    expect(clips[0].name).toBe("clip1")
     expect(clips[0].source_range.OTIO_SCHEMA).toBe("TimeRange.1")
     expect(clips[0].source_range.duration.OTIO_SCHEMA).toBe("RationalTime.1")
   })
 
   it("includes media references with target_url", () => {
-    const json = writeOTIO(makeTimeline())
+    const json = writeOTIO(makeCoreTimeline())
     const parsed = JSON.parse(json)
 
     const clip = parsed.tracks.children[0].children[0]
@@ -108,8 +195,8 @@ describe("writeOTIO", () => {
     expect(mediaRef.target_url).toBe("file:///videos/clip1.mp4")
   })
 
-  it("preserves format metadata in @chatoctopus/timeline namespace", () => {
-    const json = writeOTIO(makeTimeline())
+  it("preserves format metadata in the package namespace", () => {
+    const json = writeOTIO(makeCoreTimeline())
     const parsed = JSON.parse(json)
 
     const meta = parsed.metadata["@chatoctopus/timeline"].format
@@ -118,48 +205,57 @@ describe("writeOTIO", () => {
     expect(meta.audioRate).toBe(48000)
   })
 
+  it("accepts legacy timeline input during the migration", () => {
+    const json = writeOTIO(makeLegacyTimeline())
+    const parsed = JSON.parse(json)
+
+    expect(parsed.OTIO_SCHEMA).toBe("Timeline.1")
+    expect(parsed.tracks.children[0].children).toHaveLength(2)
+  })
+
   it("throws on invalid timeline", () => {
-    expect(() => writeOTIO(makeTimeline({ name: "" }))).toThrow(
+    expect(() => writeOTIO(makeCoreTimeline({ name: "" }))).toThrow(
       "validation failed",
     )
   })
 })
 
 describe("readOTIO", () => {
-  it("roundtrips through write/read", () => {
-    const original = makeTimeline()
-    const json = writeOTIO(original)
+  it("roundtrips through write/read into the core model", () => {
+    const json = writeOTIO(makeCoreTimeline())
     const { timeline, warnings } = readOTIO(json)
 
+    expect(warnings).toEqual([])
     expect(timeline.name).toBe("OTIO Test")
     expect(timeline.tracks).toHaveLength(1)
-    expect(timeline.tracks[0].clips).toHaveLength(2)
-    expect(timeline.assets.length).toBeGreaterThanOrEqual(2)
+    expect(timeline.tracks[0].items).toHaveLength(2)
+
+    const firstClip = expectClip(timeline.tracks[0].items[0])
+    expect(firstClip.mediaReference.type).toBe("external")
   })
 
   it("preserves clip timing through roundtrip", () => {
-    const original = makeTimeline()
+    const original = makeCoreTimeline()
     const json = writeOTIO(original)
     const { timeline } = readOTIO(json)
 
-    const origClips = original.tracks[0].clips
-    const parsedClips = timeline.tracks[0].clips
+    const originalClips = original.tracks[0].items.map((item) => expectClip(item))
+    const importedClips = timeline.tracks[0].items.map((item) => expectClip(item))
 
-    for (let i = 0; i < origClips.length; i++) {
-      expect(toSeconds(parsedClips[i].offset)).toBeCloseTo(
-        toSeconds(origClips[i].offset),
+    for (let i = 0; i < originalClips.length; i++) {
+      expect(toSeconds(importedClips[i].sourceRange?.startTime ?? ZERO)).toBeCloseTo(
+        toSeconds(originalClips[i].sourceRange?.startTime ?? ZERO),
         1,
       )
-      // OTIO uses integer frame counts so NTSC rates have ~0.01s rounding
-      expect(toSeconds(parsedClips[i].duration)).toBeCloseTo(
-        toSeconds(origClips[i].duration),
+      expect(toSeconds(importedClips[i].sourceRange?.duration ?? ZERO)).toBeCloseTo(
+        toSeconds(originalClips[i].sourceRange?.duration ?? ZERO),
         1,
       )
     }
   })
 
   it("preserves format dimensions from metadata", () => {
-    const json = writeOTIO(makeTimeline())
+    const json = writeOTIO(makeCoreTimeline())
     const { timeline } = readOTIO(json)
 
     expect(timeline.format.width).toBe(1920)
@@ -167,13 +263,21 @@ describe("readOTIO", () => {
     expect(timeline.format.audioRate).toBe(48000)
   })
 
-  it("extracts asset paths from media references", () => {
-    const json = writeOTIO(makeTimeline())
+  it("preserves external target URLs", () => {
+    const json = writeOTIO(makeCoreTimeline())
     const { timeline } = readOTIO(json)
 
-    const paths = timeline.assets.map((a) => a.path)
-    expect(paths).toContain("/videos/clip1.mp4")
-    expect(paths).toContain("/videos/clip2.mp4")
+    const targetUrls = timeline.tracks[0].items.map((item) => {
+      const clip = expectClip(item)
+      expect(clip.mediaReference.type).toBe("external")
+      if (clip.mediaReference.type !== "external") {
+        throw new Error("expected external media reference")
+      }
+      return clip.mediaReference.targetUrl
+    })
+
+    expect(targetUrls).toContain("file:///videos/clip1.mp4")
+    expect(targetUrls).toContain("file:///videos/clip2.mp4")
   })
 
   it("throws on invalid JSON", () => {
@@ -185,28 +289,30 @@ describe("readOTIO", () => {
     expect(() => readOTIO(wrong)).toThrow("Unsupported OTIO top-level schema")
   })
 
-  it("handles gaps between clips", () => {
-    const timeline = makeTimeline()
-    // Insert a gap: clip2 starts at 10s but clip1 ends at 5s
+  it("materializes explicit gaps when legacy offsets are discontinuous", () => {
+    const timeline = makeLegacyTimeline()
     timeline.tracks[0].clips[1].offset = rational(240 * 1001, 24000)
-    const json = writeOTIO(timeline)
-    const parsed = JSON.parse(json)
 
-    const children = parsed.tracks.children[0].children
-    const hasGap = children.some(
-      (c: any) => c.OTIO_SCHEMA && c.OTIO_SCHEMA.startsWith("Gap."),
-    )
-    expect(hasGap).toBe(true)
+    const { timeline: reimported } = readOTIO(writeOTIO(timeline))
+    expect(reimported.tracks[0].items.map((item) => item.kind)).toEqual([
+      "clip",
+      "gap",
+      "clip",
+    ])
 
-    const { timeline: reimported } = readOTIO(json)
-    expect(reimported.tracks[0].clips).toHaveLength(2)
-    expect(toSeconds(reimported.tracks[0].clips[1].offset)).toBeCloseTo(
-      toSeconds(rational(240 * 1001, 24000)),
+    const gap = reimported.tracks[0].items[1]
+    expect(gap.kind).toBe("gap")
+    if (gap.kind !== "gap") {
+      throw new Error("expected gap")
+    }
+
+    expect(toSeconds(gap.sourceRange.duration)).toBeCloseTo(
+      toSeconds(rational(120 * 1001, 24000)),
       1,
     )
   })
 
-  it("warns on transitions", () => {
+  it("preserves transitions from OTIO instead of dropping them", () => {
     const otio = {
       OTIO_SCHEMA: "Timeline.1",
       name: "With Transition",
@@ -297,30 +403,33 @@ describe("readOTIO", () => {
     }
 
     const { timeline, warnings } = readOTIO(JSON.stringify(otio))
-    expect(timeline.tracks[0].clips).toHaveLength(1)
-    expect(warnings.some((w) => w.includes("Transition"))).toBe(true)
+    expect(warnings).toEqual([])
+    expect(timeline.tracks[0].items.map((item) => item.kind)).toEqual([
+      "transition",
+      "clip",
+    ])
   })
 })
 
 describe("OTIO via public API", () => {
   it("exportTimeline with 'otio' editor", () => {
-    const json = exportTimeline(makeTimeline(), "otio")
+    const json = exportTimeline(makeCoreTimeline(), "otio")
     const parsed = JSON.parse(json)
     expect(parsed.OTIO_SCHEMA).toBe("Timeline.1")
   })
 
-  it("importTimeline auto-detects OTIO", () => {
-    const json = exportTimeline(makeTimeline(), "otio")
-    const { timeline } = importTimeline(json)
+  it("importTimeline auto-detects OTIO into the core model", () => {
+    const json = exportTimeline(makeCoreTimeline(), "otio")
+    const timeline = expectCoreTimeline(importTimeline(json).timeline)
+
     expect(timeline.name).toBe("OTIO Test")
-    expect(timeline.tracks[0].clips).toHaveLength(2)
+    expect(timeline.tracks[0].items).toHaveLength(2)
   })
 })
 
 describe("cross-format OTIO conversions", () => {
   it("converts FCPXML -> OTIO", () => {
-    const original = makeTimeline()
-    const fcpxml = exportTimeline(original, "fcpx")
+    const fcpxml = exportTimeline(makeLegacyTimeline(), "fcpx")
     const { timeline } = importTimeline(fcpxml)
     const otio = exportTimeline(timeline, "otio")
 
@@ -330,9 +439,8 @@ describe("cross-format OTIO conversions", () => {
   })
 
   it("converts OTIO -> xmeml", () => {
-    const original = makeTimeline()
-    const otio = exportTimeline(original, "otio")
-    const { timeline } = importTimeline(otio)
+    const otio = exportTimeline(makeCoreTimeline(), "otio")
+    const timeline = expectCoreTimeline(importTimeline(otio).timeline)
     const xmeml = exportTimeline(timeline, "premiere")
 
     expect(xmeml).toContain("<xmeml")
@@ -340,9 +448,8 @@ describe("cross-format OTIO conversions", () => {
   })
 
   it("converts OTIO -> FCPXML", () => {
-    const original = makeTimeline()
-    const otio = exportTimeline(original, "otio")
-    const { timeline } = importTimeline(otio)
+    const otio = exportTimeline(makeCoreTimeline(), "otio")
+    const timeline = expectCoreTimeline(importTimeline(otio).timeline)
     const fcpxml = exportTimeline(timeline, "fcpx")
 
     expect(fcpxml).toContain("<fcpxml")

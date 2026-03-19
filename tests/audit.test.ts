@@ -257,13 +257,17 @@ describe("audit: OTIO timing fidelity (High #2)", () => {
     const { timeline: imported } = readOTIO(json)
 
     const origClip = timeline.tracks[0].clips[0]
-    const importedClip = imported.tracks[0].clips[0]
+    const importedClip = imported.tracks[0].items[0]
+    expect(importedClip.kind).toBe("clip")
+    if (importedClip.kind !== "clip") {
+      throw new Error("expected clip")
+    }
 
-    expect(toSeconds(importedClip.duration)).toBeCloseTo(
-      toSeconds(origClip.duration),
+    expect(toSeconds(importedClip.sourceRange?.duration ?? ZERO)).toBeCloseTo(
+      toSeconds(origClip.sourceDuration),
       3,
     )
-    expect(toSeconds(importedClip.sourceIn)).toBeCloseTo(
+    expect(toSeconds(importedClip.sourceRange?.startTime ?? ZERO)).toBeCloseTo(
       toSeconds(origClip.sourceIn),
       3,
     )
@@ -372,8 +376,16 @@ describe("audit: OTIO timing fidelity (High #2)", () => {
     const json = writeOTIO(timeline)
     const { timeline: imported } = readOTIO(json)
 
-    const importedClip = imported.tracks[0].clips[0]
-    expect(toSeconds(importedClip.sourceIn)).toBeCloseTo(2.0, 3)
+    const importedClip = imported.tracks[0].items[0]
+    expect(importedClip.kind).toBe("clip")
+    if (importedClip.kind !== "clip") {
+      throw new Error("expected clip")
+    }
+
+    expect(toSeconds(importedClip.sourceRange?.startTime ?? ZERO)).toBeCloseTo(
+      2.0,
+      3,
+    )
   })
 })
 
@@ -511,11 +523,11 @@ describe("audit: xmeml sparse file references (Medium #1)", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Medium #2: OTIO asset ID stability
+// Medium #2: OTIO media reference stability
 // ---------------------------------------------------------------------------
 
-describe("audit: OTIO asset ID stability (Medium #2)", () => {
-  it("produces deterministic IDs across multiple readOTIO calls", () => {
+describe("audit: OTIO media reference stability (Medium #2)", () => {
+  it("preserves missing references deterministically across multiple readOTIO calls", () => {
     const otio = {
       OTIO_SCHEMA: "Timeline.1",
       name: "Test",
@@ -579,10 +591,18 @@ describe("audit: OTIO asset ID stability (Medium #2)", () => {
     const { timeline: t1 } = readOTIO(json)
     const { timeline: t2 } = readOTIO(json)
 
-    expect(t1.tracks[0].clips[0].assetId).toBe(t2.tracks[0].clips[0].assetId)
+    const clip1 = t1.tracks[0].items[0]
+    const clip2 = t2.tracks[0].items[0]
+    expect(clip1.kind).toBe("clip")
+    expect(clip2.kind).toBe("clip")
+    if (clip1.kind !== "clip" || clip2.kind !== "clip") {
+      throw new Error("expected clips")
+    }
+
+    expect(clip1.mediaReference).toEqual(clip2.mediaReference)
   })
 
-  it("avoids ID collisions for files with similar paths", () => {
+  it("keeps external references distinct for files with similar paths", () => {
     const path1 = "/project-a/footage/render/clip.mp4"
     const path2 = "/project-b/footage/render/clip.mp4"
 
@@ -651,8 +671,28 @@ describe("audit: OTIO asset ID stability (Medium #2)", () => {
     }
 
     const { timeline } = readOTIO(JSON.stringify(otio))
-    expect(timeline.assets.length).toBe(2)
-    expect(timeline.assets[0].id).not.toBe(timeline.assets[1].id)
+    const firstClip = timeline.tracks[0].items[0]
+    const secondClip = timeline.tracks[0].items[1]
+    expect(firstClip.kind).toBe("clip")
+    expect(secondClip.kind).toBe("clip")
+    if (firstClip.kind !== "clip" || secondClip.kind !== "clip") {
+      throw new Error("expected clips")
+    }
+
+    expect(firstClip.mediaReference.type).toBe("external")
+    expect(secondClip.mediaReference.type).toBe("external")
+    if (
+      firstClip.mediaReference.type !== "external" ||
+      secondClip.mediaReference.type !== "external"
+    ) {
+      throw new Error("expected external references")
+    }
+
+    expect(firstClip.mediaReference.targetUrl).toBe(`file://${path1}`)
+    expect(secondClip.mediaReference.targetUrl).toBe(`file://${path2}`)
+    expect(firstClip.mediaReference.targetUrl).not.toBe(
+      secondClip.mediaReference.targetUrl,
+    )
   })
 })
 
