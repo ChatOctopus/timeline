@@ -4,7 +4,7 @@ Import and export video editing timelines for Final Cut Pro, Adobe Premiere Pro,
 
 Generates well-formed FCPXML 1.8 (Final Cut Pro), FCP7 XML / xmeml v5 (Premiere, Resolve), and OTIO (OpenTimelineIO) with frame-accurate rational time math -- no floating-point drift.
 
-Phase 3 checkpoint: the package now reads and writes OTIO directly against the OTIO-first core model and exposes core-native builder APIs: `probeMediaReference()`, `buildTimelineFromFiles()`, and `createTimeline()`. FCPXML and xmeml still use the temporary legacy bridge while the adapter migration continues.
+Phase 4 checkpoint: OTIO, FCPXML, and xmeml now all adapt directly to the OTIO-first core model. Imports return `Timeline`, writers accept `Timeline` or `NLETimeline`, and lossy FCPXML/xmeml exports can surface warnings through `ExportOptions.onWarning`.
 
 ## Installation
 
@@ -167,7 +167,7 @@ writeFileSync("output.otio", exportTimeline(timeline, "otio"))
 writeFileSync("output.fcpxml", exportTimeline(timeline, "fcpx"))
 ```
 
-`Timeline` is the preferred API for new OTIO-driven work. `NLETimeline` still exists temporarily so the older FCPXML/xmeml builders and readers can keep working during the migration.
+`Timeline` is now the primary API for OTIO, FCPXML, and xmeml workflows. `NLETimeline` still exists temporarily as a compatibility input shape while the last migration cleanup work continues.
 
 ## API Reference
 
@@ -176,7 +176,7 @@ writeFileSync("output.fcpxml", exportTimeline(timeline, "fcpx"))
 | Function                                     | Description                                                                            |
 | -------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `exportTimeline(timeline, editor, options?)` | Export a `Timeline` or `NLETimeline`. `editor` is `"fcpx"`, `"premiere"`, `"resolve"`, or `"otio"`. |
-| `importTimeline(content)`                    | Parse FCPXML, xmeml, or OTIO. OTIO currently imports into `Timeline`; FCPXML/xmeml still import into `NLETimeline` during migration. |
+| `importTimeline(content)`                    | Parse FCPXML, xmeml, or OTIO into `Timeline`. |
 | `buildTimelineFromFiles(name, files)`        | Probe files with FFprobe and build a linear `Timeline` with inline media references. |
 | `createTimeline(options)`                    | Create a `Timeline` with default format values for synthetic or programmatic edits. |
 
@@ -184,12 +184,24 @@ writeFileSync("output.fcpxml", exportTimeline(timeline, "fcpx"))
 
 | Function                          | Description                        |
 | --------------------------------- | ---------------------------------- |
-| `writeFCPXML(timeline, options?)` | Generate FCPXML 1.8 string |
-| `readFCPXML(xmlString)`           | Parse FCPXML into `NLETimeline` |
-| `writeXMEML(timeline, options?)`  | Generate xmeml v5 string |
-| `readXMEML(xmlString)`            | Parse xmeml into `NLETimeline` |
+| `writeFCPXML(timeline, options?)` | Generate FCPXML 1.8 string from `Timeline` or `NLETimeline` |
+| `readFCPXML(xmlString)`           | Parse FCPXML into `Timeline` |
+| `writeXMEML(timeline, options?)`  | Generate xmeml v5 string from `Timeline` or `NLETimeline` |
+| `readXMEML(xmlString)`            | Parse xmeml into `Timeline` |
 | `writeOTIO(timeline)`             | Generate OTIO JSON from `Timeline` or `NLETimeline` |
 | `readOTIO(jsonString)`            | Parse OTIO JSON into `Timeline` |
+
+Lossy export note:
+
+```ts
+exportTimeline(timeline, "fcpx", {
+  onWarning(message) {
+    console.warn(message)
+  },
+})
+```
+
+Use `onWarning` when exporting to FCPXML or xmeml if you want to be notified when transitions, markers, metadata, missing references, or other core-only fields are dropped.
 
 ### Time Utilities
 
@@ -316,7 +328,7 @@ interface StreamInfo {
 type NLEEditor = "fcpx" | "premiere" | "resolve" | "otio"
 ```
 
-Legacy note: `NLETimeline`, `NLETrack`, `NLEClip`, and `NLEAsset` still exist temporarily while the FCPXML/xmeml adapters are migrated to the new core model. Treat them as transitional, not the long-term API.
+Legacy note: `NLETimeline`, `NLETrack`, `NLEClip`, and `NLEAsset` still exist temporarily as compatibility input types. Treat them as transitional, not the long-term API.
 
 Builder inputs:
 
