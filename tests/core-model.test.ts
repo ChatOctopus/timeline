@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { computeTimelineDuration, rational, toSeconds, validateTimeline, ZERO } from "../src/index.js"
+import { resolveFormatDefaults } from "../src/defaults.js"
 import type { Timeline } from "../src/types.js"
 
 function makeTimeline(overrides?: Partial<Timeline>): Timeline {
@@ -191,5 +192,32 @@ describe("OTIO-first core model", () => {
         }),
       ]),
     )
+  })
+
+  it("rejects non-positive audio rates", () => {
+    const timeline = makeTimeline({
+      format: {
+        width: 1920,
+        height: 1080,
+        frameRate: rational(24, 1),
+        audioRate: 0,
+      },
+    })
+
+    expect(validateTimeline(timeline)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "error",
+          message: "Invalid audio rate: 0",
+        }),
+      ]),
+    )
+  })
+
+  it("treats explicitly-undefined format overrides as absent", () => {
+    const format = resolveFormatDefaults({ width: 1280, audioRate: undefined })
+
+    expect(format.width).toBe(1280)
+    expect(format.audioRate).toBe(48000)
   })
 })

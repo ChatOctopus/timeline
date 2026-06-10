@@ -174,6 +174,7 @@ function attachConnectedClips(
   connected: ConnectedPlacement[],
   resourceMap: Map<string, string>,
   volumeDb: number | undefined,
+  tcStart: Rational,
 ): void {
   if (connected.length === 0) return
 
@@ -187,7 +188,7 @@ function attachConnectedClips(
     if (!resourceId) continue
 
     node.children.push(
-      buildAssetClipNode(placement.clip, resourceId, placement.offset, placement.lane, volumeDb),
+      buildAssetClipNode(placement.clip, resourceId, add(placement.offset, tcStart), placement.lane, volumeDb),
     )
   }
 }
@@ -211,6 +212,8 @@ export function writeFCPXML(
 
   const formatId = "r1"
   const volumeDb = options?.volumeDb
+  // Spine offsets are absolute sequence times: they include tcStart, matching FCP/Resolve output
+  const tcStart = timeline.globalStartTime ?? ZERO
   const resources = collectAdapterResources(timeline)
   const resourceMap = new Map(resources.map((resource) => [resource.reference.targetUrl, resource.id]))
   const sequenceDuration = timelineDuration(timeline, {
@@ -265,7 +268,7 @@ export function writeFCPXML(
           tag: "gap",
           attrs: {
             name: "Gap",
-            offset: toFCPString(currentTime),
+            offset: toFCPString(add(currentTime, tcStart)),
             duration: toFCPString(gapDuration),
             start: "0s",
           },
@@ -276,7 +279,7 @@ export function writeFCPXML(
           return placementStart >= toSeconds(currentTime) && placementStart < toSeconds(gapEnd)
         })
 
-        attachConnectedClips(node, attached, resourceMap, volumeDb)
+        attachConnectedClips(node, attached, resourceMap, volumeDb, tcStart)
         spineChildren.push(node)
         currentTime = gapEnd
         for (const placement of attached) {
@@ -300,13 +303,13 @@ export function writeFCPXML(
         continue
       }
 
-      const node = buildAssetClipNode(item, resourceId, currentTime, undefined, volumeDb)
+      const node = buildAssetClipNode(item, resourceId, add(currentTime, tcStart), undefined, volumeDb)
       const attached = remainingConnected.filter((placement) => {
         const placementStart = toSeconds(placement.offset)
         return placementStart >= toSeconds(currentTime) && placementStart < toSeconds(clipEnd)
       })
 
-      attachConnectedClips(node, attached, resourceMap, volumeDb)
+      attachConnectedClips(node, attached, resourceMap, volumeDb, tcStart)
       spineChildren.push(node)
       currentTime = clipEnd
       for (const placement of attached) {
@@ -331,7 +334,7 @@ export function writeFCPXML(
       },
     }
 
-    attachConnectedClips(node, remainingConnected, resourceMap, volumeDb)
+    attachConnectedClips(node, remainingConnected, resourceMap, volumeDb, tcStart)
     spineChildren.push(node)
   }
 

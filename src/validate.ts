@@ -248,6 +248,16 @@ export function validateTimeline(timeline: Timeline): ValidationError[] {
     })
   }
 
+  if (
+    !Number.isFinite(timeline.format.audioRate) ||
+    timeline.format.audioRate <= 0
+  ) {
+    errors.push({
+      type: "error",
+      message: `Invalid audio rate: ${timeline.format.audioRate}`,
+    })
+  }
+
   validateCoreTimeline(timeline, errors)
 
   return errors

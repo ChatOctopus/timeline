@@ -1,8 +1,32 @@
 import { describe, it, expect } from "vitest"
 import { writeFCPXML } from "../src/fcpxml/writer.js"
 import { readFCPXML } from "../src/fcpxml/reader.js"
+import { computeTimelineDuration } from "../src/validate.js"
 import type { Timeline, TrackItem } from "../src/types.js"
 import { rational, ZERO, toSeconds } from "../src/time.js"
+
+// Mirrors a DaVinci Resolve export: 1-hour tcStart, absolute spine offsets, no sequence audioRate
+const resolveStyleXml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+<fcpxml version="1.8">
+  <resources>
+    <format name="FFVideoFormat1080p30" frameDuration="1/30s" id="r0" height="1080" width="1920"/>
+    <asset hasVideo="1" name="a.mov" hasAudio="1" audioChannels="1" id="r1" duration="301/30s" start="0/1s" src="file:///media/a.mov" format="r0"/>
+    <asset hasVideo="1" name="b.mov" hasAudio="1" audioChannels="1" id="r2" duration="39/1s" start="0/1s" src="file:///media/b.mov" format="r0"/>
+  </resources>
+  <library>
+    <event name="Resolve Event">
+      <project name="Resolve Timeline">
+        <sequence tcFormat="NDF" tcStart="3600/1s" duration="1471/30s" format="r0">
+          <spine>
+            <asset-clip name="a" tcFormat="NDF" duration="301/30s" ref="r1" start="0/1s" enabled="1" offset="3600/1s" format="r0"/>
+            <asset-clip name="b" tcFormat="NDF" duration="39/1s" ref="r2" start="0/1s" enabled="1" offset="108301/30s" format="r0"/>
+          </spine>
+        </sequence>
+      </project>
+    </event>
+  </library>
+</fcpxml>`
 
 function makeTimeline(overrides?: Partial<Timeline>): Timeline {
   return {
@@ -242,6 +266,52 @@ describe("writeFCPXML", () => {
       "validation failed",
     )
   })
+
+  it("writes spine offsets that include the start timecode", () => {
+    const xml = writeFCPXML(makeTimeline({ globalStartTime: rational(3600, 1) }))
+
+    expect(xml).toContain('tcStart="3600/1s"')
+    expect(xml).toContain('offset="3600/1s"')
+  })
+
+  it("roundtrips a timeline with a non-zero global start time", () => {
+    const original = makeTimeline({ globalStartTime: rational(3600, 1) })
+    const { timeline } = readFCPXML(writeFCPXML(original))
+
+    expect(toSeconds(timeline.globalStartTime ?? ZERO)).toBe(3600)
+    expect(timeline.tracks[0].items.map((item) => item.kind)).toEqual([
+      "clip",
+      "gap",
+      "clip",
+    ])
+  })
+
+  it("roundtrips connected clips with a non-zero global start time", () => {
+    const base = makeTimeline({ globalStartTime: rational(3600, 1) })
+    const overlay = makeTimeline().tracks[0].items[2]
+    base.tracks.push({
+      kind: "video",
+      items: [
+        {
+          kind: "gap",
+          sourceRange: { startTime: ZERO, duration: rational(60 * 1001, 30000) },
+        },
+        overlay,
+      ],
+    })
+
+    const { timeline } = readFCPXML(writeFCPXML(base))
+    const videoTracks = timeline.tracks.filter((track) => track.kind === "video")
+
+    expect(videoTracks.length).toBe(2)
+    const firstOverlayItem = videoTracks[1].items[0]
+    expect(firstOverlayItem.kind).toBe("gap")
+    if (firstOverlayItem.kind !== "gap") {
+      throw new Error("expected gap")
+    }
+
+    expect(toSeconds(firstOverlayItem.sourceRange.duration)).toBeCloseTo(2.002, 3)
+  })
 })
 
 describe("readFCPXML", () => {
@@ -446,6 +516,21 @@ describe("readFCPXML", () => {
     expect(timeline.tracks[0].items).toHaveLength(1)
     expect(warnings.some((warning) => warning.includes("<mc-clip>"))).toBe(true)
     expect(warnings.some((warning) => warning.includes("<title>"))).toBe(true)
+  })
+
+  it("subtracts the start timecode from spine offsets", () => {
+    const { timeline } = readFCPXML(resolveStyleXml)
+
+    expect(timeline.tracks[0].items.map((item) => item.kind)).toEqual(["clip", "clip"])
+    expect(toSeconds(timeline.globalStartTime ?? ZERO)).toBe(3600)
+    expect(toSeconds(computeTimelineDuration(timeline))).toBeCloseTo(301 / 30 + 39, 3)
+  })
+
+  it("defaults the audio rate when the sequence omits audioRate", () => {
+    const { timeline } = readFCPXML(resolveStyleXml)
+
+    expect(timeline.format.audioRate).toBe(48000)
+    expect(writeFCPXML(timeline)).not.toContain("undefined")
   })
 
   it("parses minimal FCPXML", () => {

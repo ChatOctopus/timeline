@@ -14,6 +14,7 @@ import {
   ZERO,
   rational,
   toSeconds,
+  subtract,
   subtractUnclamped,
   add,
 } from "../time.js"
@@ -122,8 +123,11 @@ function externalReferenceFromAsset(
 function parseAssetClip(
   raw: any,
   resourceMap: Map<string, ExternalReference>,
+  tcStart: Rational,
 ): { clip: Clip; offset: Rational; kind: "video" | "audio"; lane: number } {
-  const offset = raw["@_offset"] ? parseFCPString(raw["@_offset"]) : ZERO
+  // Spine offsets are absolute sequence times that include tcStart
+  const rawOffset = raw["@_offset"] ? parseFCPString(raw["@_offset"]) : ZERO
+  const offset = subtract(rawOffset, tcStart)
   const duration = raw["@_duration"] ? parseFCPString(raw["@_duration"]) : ZERO
   const start = raw["@_start"] ? parseFCPString(raw["@_start"]) : ZERO
   const reference = resourceMap.get(raw["@_ref"] ?? "")
@@ -217,6 +221,7 @@ export function readFCPXML(xmlString: string): ImportResult {
 
   const sequence = findSequence(fcpxml)
   const spine = sequence?.spine
+  const tcStart = sequence?.["@_tcStart"] ? parseFCPString(sequence["@_tcStart"]) : ZERO
 
   const format: NLEFormat = resolveFormatDefaults({
     width,
@@ -255,9 +260,12 @@ export function readFCPXML(xmlString: string): ImportResult {
   if (spine) {
     const directAssetClips = ensureArray(spine["asset-clip"]).map((node) => ({
       node,
-      parsed: parseAssetClip(node, resourceMap),
+      parsed: parseAssetClip(node, resourceMap, tcStart),
     }))
-    const directGaps = ensureArray(spine.gap).map((node) => ({ node, offset: node["@_offset"] ? parseFCPString(node["@_offset"]) : ZERO }))
+    const directGaps = ensureArray(spine.gap).map((node) => ({
+      node,
+      offset: subtract(node["@_offset"] ? parseFCPString(node["@_offset"]) : ZERO, tcStart),
+    }))
     const primaryKind =
       directAssetClips
         .map(({ parsed }) => parsed.kind)
@@ -278,7 +286,7 @@ export function readFCPXML(xmlString: string): ImportResult {
       }
 
       for (const connectedNode of ensureArray(node["asset-clip"])) {
-        const connected = parseAssetClip(connectedNode, resourceMap)
+        const connected = parseAssetClip(connectedNode, resourceMap, tcStart)
         pushPlacement(connected.kind, connected.lane || 1, connected.clip, connected.offset)
       }
     }
@@ -291,7 +299,7 @@ export function readFCPXML(xmlString: string): ImportResult {
       })
 
       for (const connectedNode of ensureArray(node["asset-clip"])) {
-        const connected = parseAssetClip(connectedNode, resourceMap)
+        const connected = parseAssetClip(connectedNode, resourceMap, tcStart)
         pushPlacement(connected.kind, connected.lane || 1, connected.clip, connected.offset)
       }
     }
@@ -372,7 +380,7 @@ export function readFCPXML(xmlString: string): ImportResult {
     name: findTimelineName(fcpxml) ?? "Untitled",
     format,
     tracks,
-    globalStartTime: sequence?.["@_tcStart"] ? parseFCPString(sequence["@_tcStart"]) : ZERO,
+    globalStartTime: tcStart,
   }
 
   return { timeline, warnings }

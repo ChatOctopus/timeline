@@ -400,3 +400,72 @@ describe("cross-format OTIO conversions", () => {
     expect(fcpxml).toContain("clip1")
   })
 })
+
+describe("readOTIO frame rate inference", () => {
+  // Files from other OTIO tools commonly omit global_start_time
+  function foreignTimeline(children: unknown[]) {
+    return {
+      OTIO_SCHEMA: "Timeline.1",
+      name: "Foreign",
+      global_start_time: null,
+      tracks: {
+        OTIO_SCHEMA: "Stack.1",
+        name: "tracks",
+        children: [
+          {
+            OTIO_SCHEMA: "Track.1",
+            name: "V1",
+            kind: "Video",
+            children,
+            source_range: null,
+            effects: [],
+            markers: [],
+            metadata: {},
+            enabled: true,
+          },
+        ],
+        source_range: null,
+        effects: [],
+        markers: [],
+        metadata: {},
+        enabled: true,
+      },
+      metadata: {},
+    }
+  }
+
+  it("infers the frame rate from clip ranges when global_start_time is null", () => {
+    const clip = {
+      OTIO_SCHEMA: "Clip.2",
+      name: "clip-30fps",
+      source_range: {
+        OTIO_SCHEMA: "TimeRange.1",
+        start_time: { OTIO_SCHEMA: "RationalTime.1", rate: 30, value: 0 },
+        duration: { OTIO_SCHEMA: "RationalTime.1", rate: 30, value: 90 },
+      },
+      media_reference: {
+        OTIO_SCHEMA: "ExternalReference.1",
+        target_url: "file:///x.mp4",
+        available_range: null,
+        metadata: {},
+        name: "x.mp4",
+      },
+      metadata: {},
+      markers: [],
+      effects: [],
+      enabled: true,
+    }
+
+    const { timeline, warnings } = readOTIO(JSON.stringify(foreignTimeline([clip])))
+
+    expect(timeline.format.frameRate).toEqual(rational(30, 1))
+    expect(warnings).toEqual([])
+  })
+
+  it("warns and defaults to 24fps when no rate information exists", () => {
+    const { timeline, warnings } = readOTIO(JSON.stringify(foreignTimeline([])))
+
+    expect(timeline.format.frameRate).toEqual(rational(24, 1))
+    expect(warnings.some((warning) => warning.includes("frame rate"))).toBe(true)
+  })
+})

@@ -12,8 +12,11 @@ export const DEFAULT_FORMAT: Readonly<NLEFormat> = Object.freeze({
 })
 
 export function resolveFormatDefaults(format?: Partial<NLEFormat>): NLEFormat {
-  return {
-    ...DEFAULT_FORMAT,
-    ...(format ? structuredClone(format) : {}),
+  // Explicitly-undefined keys must fall back to defaults, not override them
+  const overrides = format ? structuredClone(format) : {}
+  for (const key of Object.keys(overrides) as (keyof NLEFormat)[]) {
+    if (overrides[key] === undefined) delete overrides[key]
   }
+
+  return { ...DEFAULT_FORMAT, ...overrides }
 }

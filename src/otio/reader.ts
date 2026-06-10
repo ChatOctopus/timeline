@@ -82,8 +82,24 @@ function parseTimeRange(value: any): { startTime: Rational; duration: Rational }
   }
 }
 
-function rateFromRationalTime(rt: any): number {
-  return rt?.rate ?? 24
+function inferFrameRate(parsed: any, warnings: string[]): Rational {
+  const globalRate = parsed?.global_start_time?.rate
+  if (typeof globalRate === "number" && globalRate > 0) {
+    return rateToRational(globalRate)
+  }
+
+  // Files without global_start_time (common outside this package) carry rates on item ranges
+  for (const track of ensureArray(parsed?.tracks?.children)) {
+    for (const item of ensureArray((track as any)?.children)) {
+      const rate = (item as any)?.source_range?.duration?.rate
+      if (typeof rate === "number" && rate > 0) {
+        return rateToRational(rate)
+      }
+    }
+  }
+
+  warnings.push("Timeline has no frame rate information; defaulting to 24fps")
+  return rateToRational(24)
 }
 
 function parseMarkers(value: unknown, warnings: string[], context: string): Marker[] | undefined {
@@ -284,8 +300,7 @@ export function readOTIO(jsonString: string): ImportResult {
   const namespace = packageNamespace(metadata)
   const formatMeta = isRecord(namespace.format) ? namespace.format : {}
   const cleanMetadata = stripPackageNamespace(metadata)
-  const globalRate = rateFromRationalTime(parsed.global_start_time)
-  const frameRate = rateToRational(globalRate)
+  const frameRate = inferFrameRate(parsed, warnings)
 
   const format: NLEFormat = resolveFormatDefaults({
     width: typeof formatMeta.width === "number" ? formatMeta.width : DEFAULT_FORMAT.width,
