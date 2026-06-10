@@ -10,7 +10,7 @@ Generates well-formed FCPXML 1.8 (Final Cut Pro), FCP7 XML / xmeml v5 (Premiere,
 npm install @chatoctopus/timeline
 ```
 
-Requires Node.js >= 18. For `buildTimelineFromFiles()` or `probeMediaReference()`, [FFmpeg/FFprobe](https://ffmpeg.org/) must be installed and on your PATH. Converting between formats does not require FFmpeg/FFprobe.
+Requires Node.js >= 18. The package is ESM-only. For `buildTimelineFromFiles()` or `probeMediaReference()`, [FFmpeg/FFprobe](https://ffmpeg.org/) must be installed and on your PATH. Converting between formats does not require FFmpeg/FFprobe.
 
 ## CLI
 
@@ -218,7 +218,7 @@ All timing uses `Rational` (`{ num: number, den: number }`) to avoid floating-po
 | `secondsToFrameAligned(secs, frameRate)` | Convert seconds, snapped to nearest frame boundary                               |
 | `toFrames(duration, frameDuration)`      | Convert rational to frame count                                                  |
 | `parseTimecode(tc, frameRate)`           | Parse SMPTE timecode (`"01:00:00;00"`) with drop-frame support                   |
-| `FRAME_RATES`                            | Common presets: `"23.976"`, `"24"`, `"25"`, `"29.97"`, `"30"`, `"59.94"`, `"60"` |
+| `FRAME_RATES`                            | Common presets: `"23.976"`, `"24"`, `"25"`, `"29.97"`, `"30"`, `"50"`, `"59.94"`, `"60"` |
 
 ### Validation
 
@@ -361,6 +361,8 @@ interface CreateTimelineOptions {
 | xmeml v5       | `.xml`    | Adobe Premiere Pro, DaVinci Resolve        | Yes  | Yes   |
 | OpenTimelineIO | `.otio`   | Resolve 18+, Hiero, rv, and OTIO ecosystem | Yes  | Yes   |
 
+FCPXML import covers `asset-clip`-style spines -- what DaVinci Resolve exports and this package generates. Final Cut's container elements (`<clip>`, `<sync-clip>`, `<mc-clip>`, `<ref-clip>`, `<audition>`, `<title>`) are not parsed yet; they are skipped with a warning.
+
 ## Verification
 
 Run the test suite:
@@ -368,6 +370,10 @@ Run the test suite:
 ```bash
 npm test
 ```
+
+Real project files exported from NLEs live in `tests/fixtures/`. Every file there is swept automatically by `tests/fixtures.test.ts`: import, validate, export to all formats, and round-trip. To extend coverage, export a timeline from your editor, sanitize the media paths, and drop the file in -- no test code needed.
+
+Fixture tests prove the package reads what editors write. The reverse -- that editors accept generated files -- still needs a manual import check in the target app before a release.
 
 Run tests with coverage:
 
