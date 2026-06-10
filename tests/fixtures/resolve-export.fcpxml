@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+<fcpxml version="1.8">
+    <resources>
+        <format name="FFVideoFormat1080p30" frameDuration="1/30s" id="r0" height="1080" width="1920"/>
+        <asset hasVideo="1" name="demo.mp4" hasAudio="1" audioSources="1" audioChannels="1" id="r1" duration="301/30s" start="0/1s" src="file:///media/V1-0001_demo.mov" format="r0"/>
+        <asset hasVideo="1" name="demo.mp4" hasAudio="1" audioSources="1" audioChannels="1" id="r2" duration="39/1s" start="0/1s" src="file:///media/V1-0002_demo.mov" format="r0"/>
+        <asset hasVideo="1" name="demo.mp4" hasAudio="1" audioSources="1" audioChannels="1" id="r3" duration="39/1s" start="0/1s" src="file:///media/V1-0003_demo.mov" format="r0"/>
+    </resources>
+    <library>
+        <event name="Timeline 1 (Resolve)">
+            <project name="Timeline 1 (Resolve)">
+                <sequence tcFormat="NDF" tcStart="3600/1s" duration="2641/30s" format="r0">
+                    <spine>
+                        <asset-clip name="demo.mp4" tcFormat="NDF" duration="301/30s" ref="r1" start="0/1s" enabled="1" offset="3600/1s" format="r0"/>
+                        <asset-clip name="demo.mp4" tcFormat="NDF" duration="39/1s" ref="r2" start="0/1s" enabled="1" offset="108301/30s" format="r0"/>
+                        <asset-clip name="demo.mp4" tcFormat="NDF" duration="39/1s" ref="r3" start="0/1s" enabled="1" offset="109471/30s" format="r0"/>
+                    </spine>
+                </sequence>
+            </project>
+        </event>
+    </library>
+</fcpxml>
