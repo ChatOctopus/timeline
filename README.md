@@ -28,6 +28,7 @@ npx @chatoctopus/timeline validate ./edit.otio --json
 | ------- | ----------- |
 | `convert <input> --to <fcpx\|premiere\|resolve\|otio> [--out <path>]` | Auto-detect input format, convert to target editor format, and write to file (`--out`) or stdout. Import and lossy-export warnings are written to stderr. |
 | `validate <input> [--json]` | Validate timeline integrity and frame alignment; exits with non-zero on hard errors |
+| `sanitize <input> [--out <path>]` | Rewrite absolute media paths to neutral placeholders so a project file is safe to share as a test fixture. Review project/clip names and marker text by hand. |
 
 ## Quick Start
 
@@ -473,6 +474,28 @@ Every clip duration and offset goes through `secondsToFrameAligned()` which snap
 - **FCPXML 1.8** for Final Cut Pro -- trackless magnetic timeline with `<asset-clip>` elements inside a `<spine>`
 - **xmeml v5** for Premiere and Resolve -- track-based with linked `<clipitem>` elements for video and audio
 - **OpenTimelineIO** (`.otio`) -- the industry-standard JSON interchange format backed by the Academy Software Foundation. OTIO acts as a universal hub: any tool that speaks OTIO gets instant access to timelines from any other format. In this package, OTIO now maps directly to the core model, including explicit gaps, transitions, markers, metadata, and inline media references.
+
+## Contributing
+
+The most useful contribution is a **real timeline exported from your editor** --
+especially one that exercises features the adapters don't fully cover yet
+(transitions, markers, multicam, drop-frame timecode, mixed frame rates,
+nested/compound clips, titles). Every file in `tests/fixtures/` is automatically
+imported, validated, exported to all formats, and round-tripped, so a fixture
+needs no test code.
+
+**Sanitize before sharing.** Real exports embed absolute media paths (your
+username, drives, client/project names). Scrub them first:
+
+```bash
+npx @chatoctopus/timeline sanitize ./your-export.fcpxml --out ./your-export.sanitized.fcpxml
+```
+
+This rewrites every media path to a neutral placeholder. Project names, clip
+names, and marker text are **not** scrubbed -- review those by hand. Then open a
+pull request adding the file to `tests/fixtures/`, or open a
+[Share a timeline file](../../issues/new?template=timeline-file.yml) issue and
+attach it (zipped). See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide.
 
 ## Acknowledgments
 

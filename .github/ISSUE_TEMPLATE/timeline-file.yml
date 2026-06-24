@@ -1,0 +1,78 @@
+name: Share a timeline file
+description: Contribute a real exported project file to harden format coverage
+title: "[fixture] "
+labels: ["fixture", "contribution"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing a real timeline! These files are what prove the
+        library reads what editors actually write.
+
+        **Before you attach anything, sanitize it** so it doesn't leak your
+        media paths or client/project names:
+
+        ```bash
+        npx @chatoctopus/timeline sanitize ./your-export.fcpxml --out ./your-export.sanitized.fcpxml
+        ```
+
+        Then **zip the sanitized file** — GitHub won't accept a raw
+        `.fcpxml` / `.otio` / `.xml` attachment.
+  - type: dropdown
+    id: editor
+    attributes:
+      label: Editor
+      description: Which application exported this file?
+      options:
+        - Final Cut Pro (.fcpxml)
+        - Adobe Premiere Pro (.xml / xmeml)
+        - DaVinci Resolve (.xml or .otio)
+        - OpenTimelineIO (.otio)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Editor version
+      placeholder: "e.g. Final Cut Pro 10.8.1, macOS 14.5"
+    validations:
+      required: false
+  - type: checkboxes
+    id: features
+    attributes:
+      label: What does this file exercise?
+      description: Tick anything notable — these are the areas we most want coverage for.
+      options:
+        - label: Transitions
+        - label: Markers
+        - label: Multicam
+        - label: Compound / nested sequences
+        - label: Titles / generators
+        - label: Drop-frame timecode (29.97 / 59.94)
+        - label: Mixed frame rates
+        - label: Multiple audio tracks / channel layouts
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything notable
+      description: What's interesting about this edit, or what you saw break on import/convert?
+    validations:
+      required: false
+  - type: textarea
+    id: file
+    attributes:
+      label: The file
+      description: Drag your **zipped, sanitized** export into this box to attach it.
+      placeholder: Drop the .zip here…
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I ran `sanitize` (or removed paths by hand) and checked the file for confidential project/clip/marker text.
+          required: true
+        - label: I have the right to share this file and agree to license it under the project's MIT license.
+          required: true
