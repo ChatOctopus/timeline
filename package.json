@@ -1,7 +1,7 @@
 {
   "name": "@chatoctopus/timeline",
-  "version": "0.2.0",
-  "description": "Import and export timelines for Final Cut Pro, Adobe Premiere, and DaVinci Resolve",
+  "version": "0.2.1",
+  "description": "Import and export video editing timelines for Final Cut Pro, Adobe Premiere Pro, DaVinci Resolve, and OpenTimelineIO",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -45,7 +45,12 @@
     "type": "git",
     "url": "https://github.com/ChatOctopus/timeline.git"
   },
+  "homepage": "https://github.com/ChatOctopus/timeline#readme",
+  "bugs": {
+    "url": "https://github.com/ChatOctopus/timeline/issues"
+  },
   "license": "MIT",
+  "author": "Chat Octopus (https://github.com/ChatOctopus)",
   "engines": {
     "node": ">=18.0.0"
   },
