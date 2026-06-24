@@ -55,6 +55,9 @@ export {
 } from "./validate.js"
 export type { ValidationError } from "./validate.js"
 
+export { sanitizeContent } from "./sanitize.js"
+export type { SanitizeResult, SanitizeMapping } from "./sanitize.js"
+
 export { writeFCPXML } from "./fcpxml/writer.js"
 export { readFCPXML } from "./fcpxml/reader.js"
 export { writeXMEML } from "./xmeml/writer.js"

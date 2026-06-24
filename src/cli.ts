@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url"
 import { exportTimeline, importTimeline } from "./index.js"
 import type { NLEEditor } from "./types.js"
 import { hasErrors, validateTimeline } from "./validate.js"
+import { sanitizeContent } from "./sanitize.js"
 
 interface CliIO {
   stdout: (message: string) => void
@@ -33,11 +34,13 @@ const HELP_TEXT = `Usage:
 Commands:
   convert <input> --to <fcpx|premiere|resolve|otio> [--out <path>]
   validate <input> [--json]
+  sanitize <input> [--out <path>]
 
 Examples:
   timeline convert ./edit.fcpxml --to otio --out ./edit.otio
   timeline validate ./edit.xml
   timeline validate ./edit.otio --json
+  timeline sanitize ./edit.fcpxml --out ./edit.sanitized.fcpxml
 `
 
 const CONVERT_HELP = `Usage:
@@ -54,6 +57,20 @@ const VALIDATE_HELP = `Usage:
 
 Options:
   -j, --json  Emit machine-readable JSON
+  -h, --help  Show this help
+`
+
+const SANITIZE_HELP = `Usage:
+  timeline sanitize <input> [--out <path>]
+
+Rewrites every absolute media path to a neutral placeholder
+(file:///media/clip-0001.mov) so a project file is safe to share as a
+test fixture. The rest of the document is left untouched. Review the
+output for project names, clip names, and marker text by hand before
+sharing -- those are not scrubbed automatically.
+
+Options:
+  -o, --out   Output file path (prints to stdout if omitted)
   -h, --help  Show this help
 `
 
@@ -308,6 +325,51 @@ async function runValidate(argv: string[], io: CliIO): Promise<number> {
   return errors.length === 0 ? 0 : 1
 }
 
+async function runSanitize(argv: string[], io: CliIO): Promise<number> {
+  const parsed = parseOptions(argv, [
+    { key: "out", short: "o", hasValue: true },
+    { key: "help", short: "h", hasValue: false },
+  ])
+
+  if (parsed.options.help === true) {
+    io.stdout(SANITIZE_HELP)
+    return 0
+  }
+
+  assertNoParseErrors(parsed)
+
+  if (parsed.positionals.length !== 1) {
+    throw new Error("sanitize expects exactly one input file")
+  }
+
+  const outPath = parsed.options.out
+  if (outPath !== undefined && typeof outPath !== "string") {
+    throw new Error("--out requires a file path")
+  }
+
+  const inputPath = parsed.positionals[0]
+  const inputContent = await readFile(inputPath, "utf-8")
+  const { content, mappings } = sanitizeContent(inputContent)
+
+  if (outPath) {
+    await writeFile(outPath, content, "utf-8")
+    io.stdout(
+      `Sanitized ${inputPath} -> ${outPath} (${mappings.length} path(s) replaced)\n`,
+    )
+  } else {
+    io.stdout(content)
+  }
+
+  for (const mapping of mappings) {
+    io.stderr(`[sanitize] ${mapping.from} -> ${mapping.to}\n`)
+  }
+  io.stderr(
+    `[sanitize] ${mappings.length} path(s) replaced. Review project names, clip names, and marker text before sharing.\n`,
+  )
+
+  return 0
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)
@@ -335,9 +397,11 @@ export async function runCli(argv: string[], io: CliIO = DEFAULT_IO): Promise<nu
         return await runConvert(rest, io)
       case "validate":
         return await runValidate(rest, io)
+      case "sanitize":
+        return await runSanitize(rest, io)
       default:
         throw new Error(
-          `Unknown command "${command}". Supported commands: convert, validate`,
+          `Unknown command "${command}". Supported commands: convert, validate, sanitize`,
         )
     }
   } catch (error) {
