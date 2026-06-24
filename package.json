@@ -1,6 +1,6 @@
 {
   "name": "@chatoctopus/timeline",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Import and export video editing timelines for Final Cut Pro, Adobe Premiere Pro, DaVinci Resolve, and OpenTimelineIO",
   "type": "module",
   "main": "dist/index.js",
